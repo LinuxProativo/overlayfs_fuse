@@ -197,7 +197,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "overlayfs-fuse"
+name = "overlayfs_fuse"
 version = "1.0.0"
 dependencies = [
  "blake3",
