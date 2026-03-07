@@ -1,0 +1,17 @@
+[package]
+name = "overlayfs_fuse"
+version = "1.0.0"
+edition = "2024"
+description = "A minimal, safe, synchronous OverlayFS implementation using FUSE written in pure Rust"
+authors = ["mxnt <m10ferrari1200@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/LinuxProativo/overlayfs_fuse"
+documentation = "https://docs.rs/overlayfs_fuse"
+readme = "README.md"
+keywords = ["overlayfs", "fuse", "filesystem", "fuser", "overlay"]
+categories = ["filesystem", "os::unix-apis"]
+
+[dependencies]
+blake3 = "1.8"
+fuser = "0.17"
+libc = "0.2"
