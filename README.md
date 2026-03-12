@@ -2,11 +2,51 @@
   <img src="logo.png" alt="ALPack" width="300"/>
 </p>
 
-<h1 align="center">OverlayFS Fuse - A FUSE-based overlay filesystem in Rust</h1>
+<h1 align="center">OverlayFS Fuse - A FUSE-based Overlay Filesystem</h1>
+<h3 align="center">Lightweight FUSE Overlay Filesystem for Portable Linux Environments.</h1>
 
-Stacks a read-only **lower** layer under a read-write **upper** layer, exposing
-a unified mount point with full Copy-on-Write (CoW) semantics, whiteout-based
-deletion, and flexible commit strategies.
+<p align="center">
+    <img src="https://img.shields.io/badge/Platform-POSIX-FCC624?&logo=linux&style=flat-square"/>
+    <img src="https://img.shields.io/github/actions/workflow/status/LinuxProativo/overlayfs_fuse/rust.yml?label=Test&style=flat-square&logo=github"/>
+    <img src="https://img.shields.io/badge/RustC-1.85+-orange?style=flat-square&logo=rust"/>
+    <img src="https://img.shields.io/github/languages/code-size/LinuxProativo/overlayfs_fuse?style=flat-square&logo=rust&label=Code%20Size"/>
+</p>
+
+## Overview
+
+A FUSE-based overlay filesystem written in Rust that stacks a read-only lower layer
+under a read-write upper layer, exposing a unified mount point with full Copy-on-Write
+(CoW) semantics, whiteout-based deletion, and flexible commit strategies.
+
+**OverlayFS-Fuse** provides a simple and robust way to create
+**ephemeral writable environments over immutable directories**.
+
+It is designed for scenarios such as:
+
+* 📦 Portable Linux application packaging;
+
+* 🛠️ Temporary build environments;
+
+* 🧩 AppImage-style runtime overlays;
+
+* 🧱 Container-like rootfs sessions without full container runtimes;
+
+* 🔒 Safe modification layers over read-only systems;
+
+Unlike kernel OverlayFS, this implementation runs entirely in
+**userspace via FUSE**, making it usable without special kernel privileges
+in many environments.
+
+The system works by combining three layers:
+
+| Layer          | Role                                    |
+| -------------- | --------------------------------------- |
+| **Lower**      | Original read-only filesystem           |
+| **Upper**      | Writable layer containing modifications |
+| **Mountpoint** | Unified view exposed to applications    |
+
+All writes occur in the **upper layer**, preserving the original filesystem
+intact until an explicit **commit** is requested.
 
 ## ✨ Features
 
