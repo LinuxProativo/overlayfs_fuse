@@ -78,7 +78,7 @@ fn test_custom_upper_path() {
     assert!(custom_upper.join("note.txt").exists());
 
     let overlay_default = OverlayFS::new(lower);
-    assert_eq!(overlay_default.handle().upper(), tmp.join("lower.upper"));
+    assert_eq!(overlay_default.handle().upper(), tmp.join("lower_upper"));
 }
 
 #[test]
@@ -611,7 +611,7 @@ fn test_proot_alpine_apk_add_inner(rootfs_override: Option<&Path>) {
         let upper_content = fs::read(&installed_upper).unwrap_or_default();
         if upper_content == lower_before {
             eprintln!(
-                "WARN: upper/lib/apk/db/installed is identical to lower —                  apk may not have installed the package (already satisfied via busybox?).                  stdout: {}\nstderr: {}",
+                "WARN: upper/lib/apk/db/installed is identical to lower — apk may not have installed the package (already satisfied via busybox?). stdout: {}\nstderr: {}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr),
             );

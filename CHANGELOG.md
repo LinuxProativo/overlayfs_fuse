@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.1.0] — 2026-03-13
+
+### Added
+
+#### Core Overlay Logic (`overlay.rs`)
+- **State Safety:** Added `is_mounted()` checks to `set_upper()`, `set_inode_mode()`, and `mountpoint_as_home()` to prevent configuration changes while the filesystem is active.
+- **Fluent API:** Updated configuration methods to return `&mut Self`, allowing for method chaining (Builder Pattern).
+- **Automated Cleanup:** Enhanced `umount()` and `drop` logic to ensure the temporary mount point directory is removed from the host system after a successful unmounting.
+
+#### Path Management (`files.rs`)
+- **Collision-Resistant Naming:** Implemented a new naming strategy for `mount_point` using a session ID prefix and a nanosecond timestamp (e.g., `mount_name_session_timestamp`). This prevents `Permission Denied` errors during parallel test execution.
+- **XDG/Home Integration:** Added `mountpoint_as_home()` to optionally relocate the mount point to `~/.cache`. This provides a fallback to the system's temporary directory if `$HOME` is not available.
+- **Naming Hygiene:** Replaced dot-prefixed hidden directories (`.upper`, `.mountpoint`) with underscore-separated visible names (`_upper`, `mount_...`) for better visibility and system compatibility.
+
+### Fixed
+- **FUSE Mounting Races:** Resolved `fusermount3` access errors in tests by ensuring unique mount point paths for every instance, even when sharing the same PID.
+
 ## [1.0.0] — Initial Release
 
 ### Added
@@ -15,7 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `Preserve` — retains the upper layer as-is after unmount.
   - `Discard` — removes the upper layer and mount point entirely.
   - `Commit` — merges upper layer changes back into the lower layer, then cleans up.
-  - `CommitAtomic` — performs a backup-and-swap merge to guarantee data integrity on crash.
+  - `CommitAtomic` — performs a backup-and-swap merge to guarantee data integrity on a crash.
 - `set_upper()` and `set_inode_mode()` for custom configuration before mounting.
 - `OverlayHandle` struct providing read-only access to `lower`, `upper`, and `mount_point` paths.
 - `copy_xattrs()` to preserve extended attributes during Copy-on-Write promotions and commits.
@@ -52,7 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Custom upper path and inode mode configuration.
 - `Commit` and `CommitAtomic` merge strategies, including whiteout/deletion handling.
 - Copy-on-Write correctness: lower layer must remain unmodified after writes through the mount.
-- Rename from lower: whiteout created at old path, file appears at new path in upper.
+- Rename from lower: whiteout created at an old path, file appears at a new path in upper.
 - Symlink visibility, CoW preservation (symlink stays a symlink in upper), and dangling symlink tolerance.
 - Whiteout creation and file hiding after `unlink`.
 - `rmdir` returning `ENOTEMPTY` on non-empty directories; success after manual emptying.

@@ -10,7 +10,7 @@ use crate::InodeMode;
 use fuser::{BackgroundSession, Config, MountOption, SessionACL};
 use libc::{lgetxattr, llistxattr, lsetxattr};
 use std::ffi::CString;
-use std::io::Result;
+use std::io::{Error, Result};
 use std::os::unix;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -99,16 +99,48 @@ impl OverlayFS {
     ///
     /// # Arguments
     /// * `path` - The new `PathBuf` for the upper (read-write) layer.
-    pub fn set_upper(&mut self, path: PathBuf) {
+    ///
+    /// # Returns
+    /// * A mutable reference to `Self` for method chaining.
+    ///
+    /// # Panics
+    /// If the overlay is already mounted.
+    pub fn set_upper(&mut self, path: PathBuf) -> &mut Self {
+        assert!(!self.is_mounted(), "Cannot change upper layer path while the filesystem is mounted");
         self.files.upper = path;
+        self
     }
 
     /// Sets the inode generation mode.
     ///
     /// # Arguments
     /// * `mode` - The `InodeMode` strategy (e.g., `Virtual` or `Persistent`).
-    pub fn set_inode_mode(&mut self, mode: InodeMode) {
+    ///
+    /// # Returns
+    /// * A mutable reference to `Self` for method chaining.
+    ///
+    /// # Panics
+    /// If the overlay is already mounted.
+    pub fn set_inode_mode(&mut self, mode: InodeMode) -> &mut Self {
+        assert!(!self.is_mounted(), "Cannot change inode mode while the filesystem is mounted");
         self.mode = mode;
+        self
+    }
+
+    /// Configures the mount point to be inside the user's home cache directory.
+    ///
+    /// If the `HOME` environment variable is present, it relocates the mount point
+    /// to `~/.cache/mount_name`. Otherwise, it retains its current location.
+    ///
+    /// # Returns
+    /// * A mutable reference to `Self` to allow for method chaining.
+    ///
+    /// # Panics
+    /// If the overlay is already mounted.
+    pub fn mountpoint_as_home(&mut self) -> &mut Self {
+        assert!(!self.is_mounted(), "Cannot relocate mount point while the filesystem is mounted");
+        self.files.mountpoint_as_home();
+        self
     }
 
     /// Mounts the filesystem using FUSE.
@@ -177,6 +209,10 @@ impl OverlayFS {
             if self.is_mounted() {
                 self.internal_libc_umount(true);
             }
+        }
+
+        if self.files.mount_point.exists() {
+            let _ = fs::remove_dir(&self.files.mount_point);
         }
     }
 
@@ -512,12 +548,12 @@ impl OverlayFS {
                                     value2.len(),
                                 );
                                 if n > 0 {
-                                    Self::safe_lsetxattr(&dst_c, &name_c, &value)?;
+                                    Self::check_lsetxattr(&dst_c, &name_c, &value)?;
                                 }
                             }
                         }
                     } else {
-                        Self::safe_lsetxattr(&dst_c, &name_c, &value)?;
+                        Self::check_lsetxattr(&dst_c, &name_c, &value)?;
                     }
                 }
 
@@ -638,7 +674,7 @@ impl OverlayFS {
     ///
     /// # Returns
     /// * `Result<()>` - `Ok(())` if the attribute was successfully set, or an `io::Error` on failure.
-    fn safe_lsetxattr(path: &CString, name: &CString, value: &[u8]) -> Result<()> {
+    fn check_lsetxattr(path: &CString, name: &CString, value: &[u8]) -> Result<()> {
         let ret = unsafe {
             lsetxattr(
                 path.as_ptr(),
@@ -650,7 +686,7 @@ impl OverlayFS {
         };
 
         if ret != 0 {
-            return Err(std::io::Error::last_os_error());
+            return Err(Error::last_os_error());
         }
 
         Ok(())
