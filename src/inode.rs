@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// Defines the strategy for generating inode numbers.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InodeMode {
     /// Inodes are generated sequentially and are not preserved across mounts.
     Virtual,

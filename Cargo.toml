@@ -1,6 +1,6 @@
 [package]
 name = "overlayfs_fuse"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 description = "A minimal, safe, synchronous OverlayFS implementation using FUSE written in pure Rust."
 authors = ["mxnt <m10ferrari1200@gmail.com>"]
@@ -16,3 +16,5 @@ categories = ["filesystem", "os::unix-apis"]
 blake3 = "1.8"
 fuser = "0.17"
 libc = "0.2"
+memmap2  = "0.9"
+zerocopy = { version = "0.8", features = ["derive"] }

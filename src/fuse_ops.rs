@@ -21,6 +21,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use zerocopy::IntoBytes;
 
 /// TTL for upper-layer entries: always revalidate since the upper layer is mutable.
 const TTL: Duration = Duration::ZERO;
@@ -1026,16 +1027,48 @@ impl Filesystem for OverlayOps {
             return reply.error(Errno::from_i32(libc::ENOENT));
         };
 
-        match fs::File::open(&full) {
-            Ok(mut file) => {
+        let file = match fs::File::open(&full) {
+            Ok(f) => f,
+            Err(e) => return reply.error(Errno::from_i32(e.raw_os_error().unwrap_or(libc::EIO))),
+        };
+
+        let file_len = match file.metadata() {
+            Ok(m) => m.len() as usize,
+            Err(e) => return reply.error(Errno::from_i32(e.raw_os_error().unwrap_or(libc::EIO))),
+        };
+
+        let offset_usize = offset as usize;
+        if file_len == 0 || offset_usize >= file_len {
+            return reply.data(&[]);
+        }
+
+        const MMAP_THRESHOLD: usize = 128 * 1024;
+
+        if file_len < MMAP_THRESHOLD {
+            let mut file = file;
+            let mut buf = vec![0u8; size as usize];
+            if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                return reply.error(Errno::from_i32(e.raw_os_error().unwrap_or(libc::EIO)));
+            }
+            let n = file.read(&mut buf).unwrap_or(0);
+            return reply.data(buf[..n].as_bytes());
+        }
+
+        match unsafe { memmap2::MmapOptions::new().map(&file) } {
+            Ok(mmap) => {
+                let end = (offset_usize + size as usize).min(file_len);
+                let slice: &[u8] = &mmap[offset_usize..end];
+                reply.data(slice.as_bytes());
+            }
+            Err(_) => {
+                let mut file = file;
                 let mut buf = vec![0u8; size as usize];
                 if let Err(e) = file.seek(SeekFrom::Start(offset)) {
                     return reply.error(Errno::from_i32(e.raw_os_error().unwrap_or(libc::EIO)));
                 }
                 let n = file.read(&mut buf).unwrap_or(0);
-                reply.data(&buf[..n]);
+                reply.data(buf[..n].as_bytes());
             }
-            Err(e) => reply.error(Errno::from_i32(e.raw_os_error().unwrap_or(libc::EIO))),
         }
     }
 

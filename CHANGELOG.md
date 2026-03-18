@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.2.0] — 2026-03-18
+
+### Added
+
+#### Zero-Copy Read Path (`fuse_ops.rs`)
+- **`memmap2` integration:** `read()` now memory-maps files ≥ 128 KiB via `memmap2::MmapOptions`, returning a slice directly to the FUSE kernel without allocating an intermediate `Vec<u8>`.
+- **`zerocopy` integration:** `IntoBytes` is used on all `reply.data()` call sites as a compile-time guarantee that the byte slice passed to the kernel contains no padding or uninitialized bytes.
+- **Tiered read strategy:** files below 128 KiB continue to use a plain buffered read to avoid mmap setup overhead; files at or above the threshold use mmap with an automatic fallback to the buffered path for special files (pipes, device nodes) that do not support mmap.
+- **EOF fast-path:** `read()` now returns an empty slice immediately when the file is empty or `offset >= file_len`, without opening or mapping the file.
+
+#### Derive Macros (`overlay.rs`, `inode.rs`)
+- `OverlayAction` and `InodeMode` now derive `Debug`, `Clone`, `Copy`, `PartialEq`, and `Eq`.
+
 ## [1.1.0] — 2026-03-13
 
 ### Added

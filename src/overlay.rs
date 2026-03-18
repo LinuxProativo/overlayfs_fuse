@@ -20,6 +20,7 @@ use std::time::Duration;
 use std::{fs, ptr};
 
 /// Defines the finalization strategy for the upper layer when the filesystem is closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayAction {
     /// Keep the upper layer files as they are.
     Preserve,

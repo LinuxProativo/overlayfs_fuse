@@ -3,8 +3,6 @@
 //! This crate provides a FUSE-based overlay filesystem structure
 //! with automated layer management.
 
-// TODO Next Version Implement ZeroCopy
-
 mod files;
 mod fuse_ops;
 mod inode;
