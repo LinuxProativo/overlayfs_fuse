@@ -74,6 +74,12 @@ intact until an explicit **commit** is requested.
 - 🧾 **Content-based deduplication on commit**  
   Files are compared by size, mtime, and BLAKE3 hash before overwriting.
 
+- 🚫 **Rootfs-aware commit filtering**  
+  `CommitFilter` lets you exclude virtual directories (`/dev`, `/proc`, `/sys`…),
+  specific filenames, zero-permission stubs, and zero-byte placeholder files from
+  being merged back into the lower layer — essential when the overlay wraps a rootfs
+  managed by `bwrap` or `proot`.
+
 ## 🚀 Full Lifecycle Example
 
 This example demonstrates the complete flow: configuring, mounting, interacting
@@ -170,6 +176,85 @@ inst1.mount().unwrap();
 inst2.mount().unwrap(); // No "Directory already exists" error!
 ```
 
+### 🚫 Commit Filtering (rootfs-aware)
+
+When the overlay wraps a rootfs managed by `bwrap` or `proot`, many directories
+should never be committed back to the lower layer — `/dev`, `/proc`, `/sys`, and
+similar paths are either kernel-virtual or bind-mounted from the host and carry no
+meaningful state.
+
+`CommitFilter` solves this with a composable builder evaluated at commit
+time for both `Commit` and `CommitAtomic` actions.
+
+**Quick start with rootfs defaults:**
+
+```rust
+use overlay_fuse::{CommitFilter, OverlayFS, OverlayAction};
+use std::path::PathBuf;
+
+let mut overlay = OverlayFS::new(PathBuf::from("/path/to/rootfs"));
+overlay.set_commit_filter(CommitFilter::rootfs()); // excludes /dev /proc /sys /run /tmp /mnt /media /home + 0o000 stubs
+overlay.mount().unwrap();
+
+// ... use the overlay ...
+
+overlay.overlay_action(OverlayAction::CommitAtomic);
+```
+
+`CommitFilter::rootfs()` pre-populates the filter with the eight directories that
+`bwrap` / `proot` typically bind-mount, and enables zero-permission skipping for
+device stubs:
+
+| Path     | Reason skipped                                           |
+|----------|----------------------------------------------------------|
+| `/dev`   | Kernel-managed devices; never real files.                |
+| `/proc`  | Virtual procfs; kernel-generated per-process.            |
+| `/sys`   | sysfs kernel ABI; always bind-mounted from the host.     |
+| `/run`   | Runtime state (PIDs, sockets); stale after session ends. |
+| `/tmp`   | Temporary files; sandbox bind-mounts a fresh tmpfs here. |
+| `/mnt`   | Generic bind entry point.                                |
+| `/media` | Removable-media mount points; host-managed.              |
+| `/home`  | User home; sandbox bind-mounts the real home here.       |
+
+**Adding custom exclusions:**
+
+```rust
+use overlay_fuse::CommitFilter;
+
+let filter = CommitFilter::rootfs()
+    // Extra directories to skip entirely (single or batch):
+    .skip_dir("/opt/scratch")
+    .skip_dirs(["/var/tmp", "/var/run", "/var/lock"])
+
+    // Exact filenames to skip at any depth (single or batch):
+    .skip_file("lost+found")
+    .skip_files(["__pycache__", ".DS_Store", "Thumbs.db"])
+
+    // Skip zero-byte regular files inside specific directories
+    // (the directory itself is still committed; only empty files inside are dropped):
+    .skip_empty_files_in("/var/cache")
+    .skip_empty_files_in_dirs(["/var/log", "/var/spool"]);
+```
+
+**All available builder methods:**
+
+| Method                            | What it does                                           |
+|-----------------------------------|--------------------------------------------------------|
+| `CommitFilter::new()`             | Empty filter — nothing skipped.                        |
+| `CommitFilter::rootfs()`          | Pre-filled rootfs defaults (see table above).          |
+| `.skip_dir(path)`                 | Exclude one directory and all descendants.             |
+| `.skip_dirs(iter)`                | Exclude multiple directories at once.                  |
+| `.skip_file(name)`                | Exclude an exact filename at any depth.                |
+| `.skip_files(iter)`               | Exclude multiple filenames at once.                    |
+| `.skip_empty_files_in(dir)`       | Drop zero-byte regular files inside `dir` (any depth). |
+| `.skip_empty_files_in_dirs(iter)` | Same, for multiple directories.                        |
+| `.skip_zero_permissions(bool)`    | Exclude non-symlink entries with mode `0o000`.         |
+| `overlay.clear_commit_filter()`   | Remove the filter, restoring default behaviour.        |
+
+> **Note:** Leading `/` is always stripped from directory paths, so `"/dev"` and
+> `"dev"` are equivalent. Directory matching is component-level — `"dev"` never
+> accidentally matches `"devices"`.
+
 ## 📚 OverlayAction Reference
 
 | Action         | Behaviour                                                         |
@@ -179,7 +264,7 @@ inst2.mount().unwrap(); // No "Directory already exists" error!
 | `Commit`       | Upper merged into lower (whiteouts processed); both cleaned up.   |
 | `CommitAtomic` | Backup-and-swap merge; upper removed only after successful write. |
 
-## 📂 Path Conventions 
+## 📂 Path Conventions
 
 Given `OverlayFS::new(PathBuf::from("/base/dir"))`:
 
@@ -192,7 +277,7 @@ Given `OverlayFS::new(PathBuf::from("/base/dir"))`:
 
 ### ⚠️ Configuration Rules
 
-- 📌 **Pre-mount only:** You must call `set_upper()`, `set_inode_mode()`, or `mountpoint_as_home()` **before** calling `mount()`. 
+- 📌 **Pre-mount only:** You must call `set_upper()`, `set_inode_mode()`, or `mountpoint_as_home()` **before** calling `mount()`.
 - 📌 **State Protection:** To prevent data corruption, these methods will panic if they detect the filesystem is already mounted.
 - 📌 **Automatic Cleanup:** The `mount_point` directory is automatically created on `mount()` and removed on `umount()` or when the object is dropped.
 
@@ -214,16 +299,17 @@ The version 1.1.0 introduces strict state management to prevent common developme
   When `umount()` is called or the `OverlayFS` object is dropped, the temporary mount
   point directory is automatically removed from the host system.
 
-## 📝 Project Structure 
+## 📝 Project Structure
 
 ```
 src/
-├── lib.rs        # Public API re-exports
-├── overlay.rs    # OverlayFS controller, commit strategies, xattr utilities
-├── layers.rs     # LayerManager: resolve, CoW, whiteout management
-├── inode.rs      # InodeStore: thread-safe inode ↔ path mapping
-├── files.rs      # OverlayFiles: layer path configuration
-└── fuse_ops.rs   # FUSE operation handlers
+├── lib.rs             # Public API re-exports
+├── overlay.rs         # OverlayFS controller, commit strategies, xattr utilities
+├── commit_filter.rs   # CommitFilter: rootfs-aware commit exclusion rules
+├── layers.rs          # LayerManager: resolve, CoW, whiteout management
+├── inode.rs           # InodeStore: thread-safe inode ↔ path mapping
+├── files.rs           # OverlayFiles: layer path configuration
+└── fuse_ops.rs        # FUSE operation handlers
 ```
 
 ## 📜 MIT License
