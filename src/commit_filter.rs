@@ -18,7 +18,11 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use overlay_fuse::CommitFilter;
+//! use std::path::PathBuf;
+//! use overlayfs_fuse::OverlayFS;
+//! use overlayfs_fuse::CommitFilter;
+//!
+//! let mut overlay = OverlayFS::new(PathBuf::from("test"));
 //!
 //! let filter = CommitFilter::rootfs()          // sensible defaults for a rootfs overlay
 //!     .skip_dir("/opt/scratch")                // ignore an extra directory
@@ -72,7 +76,7 @@ pub struct CommitFilter {
     /// When `true`, any entry whose Unix permission bits are exactly `0o000`
     /// is excluded from the commit.
     ///
-    /// In rootfs overlays these entries are typically kernel-managed device
+    /// In rootfs overlays, these entries are typically kernel-managed device
     /// stubs, intentionally inaccessible sockets, or artifacts left by the
     /// sandbox runtime that carry no meaning in the lower layer.
     skip_zero_permissions: bool,
@@ -101,16 +105,16 @@ impl CommitFilter {
     ///
     /// The following root-level directories are excluded:
     ///
-    /// | Path      | Reason |
-    /// |-----------|--------|
-    /// | `/dev`    | Character/block devices managed by the kernel; never real files. |
-    /// | `/proc`   | Virtual procfs; kernel-generated, mounts change per-process. |
-    /// | `/sys`    | sysfs; kernel ABI, always bind-mounted from the host. |
-    /// | `/run`    | Runtime state (PID files, sockets); meaningless after session ends. |
-    /// | `/tmp`    | Temporary files; bwrap/proot typically bind-mount a fresh tmpfs here. |
-    /// | `/mnt`    | Generic mount target; typically used as a bind entry point. |
-    /// | `/media`  | Removable-media mount points; host-managed. |
-    /// | `/home`   | User home directories; bwrap bind-mounts the real home here. |
+    /// | Path | Reason |
+    /// |------|--------|
+    /// | `/dev` | Character/block devices managed by the kernel; never real files. |
+    /// | `/proc` | Virtual procfs; kernel-generated, mounts change a per-process. |
+    /// | `/sys` | sysfs; kernel ABI, always bind-mounted from the host. |
+    /// | `/run` | Runtime state (PID files, sockets); meaningless after the session ends. |
+    /// | `/tmp` | Temporary files; bwrap/proot typically bind-mount a fresh tmpfs here. |
+    /// | `/mnt` | Generic mount target; typically used as a bind entry point. |
+    /// | `/media` | Removable-media mount points; host-managed. |
+    /// | `/home` | User home directories; bwrap bind-mounts the real home here. |
     ///
     /// Zero-permission skipping is also enabled because rootfs overlays
     /// routinely produce `0o000` stubs for `null`, `zero`, `random`, etc.
@@ -129,8 +133,6 @@ impl CommitFilter {
         filter
     }
 
-    // ── Builder methods ──────────────────────────────────────────────────────
-
     /// Adds a root-relative directory path that should be excluded from the
     /// commit, including all of its descendants.
     ///
@@ -142,7 +144,7 @@ impl CommitFilter {
     ///   `PathBuf`).
     ///
     /// # Returns
-    /// * `Self` with the new exclusion added (builder pattern).
+    /// * `Self` with the new exclusion added (a builder pattern).
     pub fn skip_dir(mut self, path: impl AsRef<Path>) -> Self {
         let p = path.as_ref();
         let stripped = p.strip_prefix("/").unwrap_or(p);
@@ -159,7 +161,7 @@ impl CommitFilter {
     /// * `name` – The bare filename (e.g. `"lost+found"`, `".gitkeep"`).
     ///
     /// # Returns
-    /// * `Self` with the filename exclusion added (builder pattern).
+    /// * `Self` with the filename exclusion added (a builder pattern).
     pub fn skip_file(mut self, name: impl Into<String>) -> Self {
         self.skip_files.insert(name.into());
         self
@@ -180,8 +182,6 @@ impl CommitFilter {
         self
     }
 
-    // ── Internal helpers (used by overlay.rs) ────────────────────────────────
-
     /// Returns `true` when the given **relative** path should be excluded from
     /// the commit based on the current filter configuration.
     ///
@@ -198,24 +198,18 @@ impl CommitFilter {
     /// * `true` if the entry should be skipped.
     /// * `false` if the entry should be committed normally.
     pub(crate) fn should_skip(&self, rel: &Path, abs_upper: &Path) -> bool {
-        // ── 1. Exact filename check ──────────────────────────────────────────
         if let Some(name) = rel.file_name() {
             if self.skip_files.contains(name.to_string_lossy().as_ref()) {
                 return true;
             }
         }
 
-        // ── 2. Directory prefix check ────────────────────────────────────────
-        //
-        // `strip_prefix` performs component-level matching, so "dev" correctly
-        // matches "dev/null" but not "devices/something".
         for skipped in &self.skip_dirs {
             if rel == skipped || rel.strip_prefix(skipped).is_ok() {
                 return true;
             }
         }
 
-        // ── 3. Zero-permission check ─────────────────────────────────────────
         if self.skip_zero_permissions {
             if let Ok(meta) = fs::symlink_metadata(abs_upper) {
                 if !meta.file_type().is_symlink() {
