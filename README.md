@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" width="300"/>
+  <img src="https://raw.githubusercontent.com/LinuxProativo/overlayfs_fuse/refs/heads/master/logo.png" width="300"/>
 </p>
 
 <h1 align="center">OverlayFS Fuse - A FUSE-based Overlay Filesystem</h1>

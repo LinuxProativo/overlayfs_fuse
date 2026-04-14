@@ -3,6 +3,7 @@
 //! This module coordinates the mounting, unmounting, and synchronization
 //! (commit/discard) of the overlay layers using FUSE.
 
+use crate::commit_filter::CommitFilter;
 use crate::files::OverlayFiles;
 use crate::fuse_ops::OverlayOps;
 use crate::layers::WH_PREFIX;
@@ -76,6 +77,8 @@ pub struct OverlayFS {
     session: Option<BackgroundSession>,
     /// Metadata and path configuration for the overlay layers.
     files: OverlayFiles,
+    /// Optional filter applied during every commit operation.
+    commit_filter: Option<CommitFilter>,
 }
 
 impl OverlayFS {
@@ -93,6 +96,7 @@ impl OverlayFS {
             files,
             mode: InodeMode::Virtual,
             session: None,
+            commit_filter: None,
         }
     }
 
@@ -107,7 +111,10 @@ impl OverlayFS {
     /// # Panics
     /// If the overlay is already mounted.
     pub fn set_upper(&mut self, path: PathBuf) -> &mut Self {
-        assert!(!self.is_mounted(), "Cannot change upper layer path while the filesystem is mounted");
+        assert!(
+            !self.is_mounted(),
+            "Cannot change upper layer path while the filesystem is mounted"
+        );
         self.files.upper = path;
         self
     }
@@ -123,7 +130,10 @@ impl OverlayFS {
     /// # Panics
     /// If the overlay is already mounted.
     pub fn set_inode_mode(&mut self, mode: InodeMode) -> &mut Self {
-        assert!(!self.is_mounted(), "Cannot change inode mode while the filesystem is mounted");
+        assert!(
+            !self.is_mounted(),
+            "Cannot change inode mode while the filesystem is mounted"
+        );
         self.mode = mode;
         self
     }
@@ -139,8 +149,41 @@ impl OverlayFS {
     /// # Panics
     /// If the overlay is already mounted.
     pub fn mountpoint_as_home(&mut self) -> &mut Self {
-        assert!(!self.is_mounted(), "Cannot relocate mount point while the filesystem is mounted");
+        assert!(
+            !self.is_mounted(),
+            "Cannot relocate mount point while the filesystem is mounted"
+        );
         self.files.mountpoint_as_home();
+        self
+    }
+
+    /// Sets a [`CommitFilter`] that is applied whenever the upper layer is merged
+    /// into the lower layer (both `Commit` and `CommitAtomic` modes).
+    ///
+    /// Calling this method replaces any previously configured filter. Pass
+    /// [`CommitFilter::new()`] to clear all exclusions, or
+    /// [`CommitFilter::rootfs()`] to use the rootfs-appropriate defaults.
+    ///
+    /// The filter can be set at any time, including while the filesystem is
+    /// mounted, since it is only consulted at commit time.
+    ///
+    /// # Arguments
+    /// * `filter` - The [`CommitFilter`] instance to use from now on.
+    ///
+    /// # Returns
+    /// * A mutable reference to `Self` for method chaining.
+    pub fn set_commit_filter(&mut self, filter: CommitFilter) -> &mut Self {
+        self.commit_filter = Some(filter);
+        self
+    }
+
+    /// Removes any previously configured [`CommitFilter`], restoring the default
+    /// behavior where every entry in the upper layer is committed as-is.
+    ///
+    /// # Returns
+    /// * A mutable reference to `Self` for method chaining.
+    pub fn clear_commit_filter(&mut self) -> &mut Self {
+        self.commit_filter = None;
         self
     }
 
@@ -266,12 +309,12 @@ impl OverlayFS {
         match action {
             OverlayAction::Preserve => (),
             OverlayAction::Discard => {
-                let _ = fs::remove_dir_all(&self.files.upper);
+                let _ = obliterate::ensure_removed(&self.files.upper);
                 let _ = fs::remove_dir_all(&self.files.mount_point);
             }
             OverlayAction::Commit => {
                 let result = self.commit_changes(&self.files.upper, &self.files.lower);
-                let _ = fs::remove_dir_all(&self.files.upper);
+                let _ = obliterate::ensure_removed(&self.files.upper);
                 let _ = fs::remove_dir_all(&self.files.mount_point);
                 if let Err(e) = result {
                     eprintln!("Failed to commit changes: {}", e);
@@ -279,7 +322,7 @@ impl OverlayFS {
             }
             OverlayAction::CommitAtomic => {
                 let result = self.commit_atomic(&self.files.upper, &self.files.lower);
-                let _ = fs::remove_dir_all(&self.files.upper);
+                let _ = obliterate::ensure_removed(&self.files.upper);
                 let _ = fs::remove_dir_all(&self.files.mount_point);
                 if let Err(e) = result {
                     eprintln!("Failed to commit atomic changes: {}", e);
@@ -319,6 +362,13 @@ impl OverlayFS {
     }
 
     /// Performs an atomic commit by preparing a new tree and swapping it with the original.
+    ///
+    /// The strategy is:
+    /// 1. Clone the current lower into `lower.new` (filtered by [`CommitFilter`] if set,
+    ///    so virtual/bind-mount directories are not uselessly duplicated).
+    /// 2. Merge the upper layer changes into `lower.new`.
+    /// 3. Rename the current lower → `lower.backup`, then `lower.new` → lower.
+    /// 4. Remove the backup on success (or restore it on failure).
     ///
     /// # Arguments
     /// * `src` - Source directory containing the new changes (upper).
@@ -363,6 +413,11 @@ impl OverlayFS {
 
     /// Recursively copies an entire directory tree from source to destination.
     ///
+    /// Used by [`commit_atomic`] to snapshot the current lower layer before the
+    /// merge begins.  If a [`CommitFilter`] is configured, directories and files
+    /// that would be excluded from the commit are also excluded from the snapshot,
+    /// avoiding unnecessary I/O for virtual or bind-mounted subtrees.
+    ///
     /// # Arguments
     /// * `src` - The source directory path.
     /// * `dst` - The destination directory path.
@@ -371,6 +426,7 @@ impl OverlayFS {
     /// * `Ok(())` if the entire tree is copied successfully.
     /// * `Err` if any I/O error occurs during traversal or copying.
     fn copy_tree(&self, src: &Path, dst: &Path) -> Result<()> {
+        let src_root = src;
         if !dst.exists() {
             fs::create_dir_all(dst)?;
         }
@@ -386,6 +442,16 @@ impl OverlayFS {
                 let src_path = entry.path();
                 let dst_path = current_dst.join(&name);
                 let ft = entry.file_type()?;
+
+                if let Some(filter) = &self.commit_filter {
+                    let rel = src_path.strip_prefix(src_root).unwrap_or(&src_path);
+                    if filter.should_skip(rel, &src_path) {
+                        continue;
+                    }
+                    if ft.is_dir() && filter.is_skipped_dir(rel) {
+                        continue;
+                    }
+                }
 
                 if ft.is_dir() {
                     if !dst_path.exists() {
@@ -414,6 +480,12 @@ impl OverlayFS {
     /// It handles file promotion, directory creation, metadata preservation (UID/GID/Permissions),
     /// and processes "whiteout" files to reflect deletions in the final merged state.
     ///
+    /// If a [`CommitFilter`] is configured, matching entries are silently skipped
+    /// *before* any I/O is attempted, so neither the entry nor its whiteout
+    /// counterpart reaches the destination.  Whiteout processing always runs
+    /// first so that the filter never accidentally suppresses explicit deletions
+    /// in the upper layer.
+    ///
     /// # Safety
     /// This function uses `libc::lchown` via `unsafe` blocks to ensure that ownership
     /// is preserved for the current user/group, which is critical for maintaining
@@ -427,6 +499,7 @@ impl OverlayFS {
     /// * `Ok(())` if the merge completes successfully.
     /// * `Err` if any I/O operation or metadata update fails.
     fn commit_copy_phase(&self, src: &Path, dst: &Path) -> Result<()> {
+        let src_root = src;
         let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
 
         while let Some((current_src, current_dst)) = stack.pop() {
@@ -446,6 +519,16 @@ impl OverlayFS {
                         fs::remove_file(&target_path)
                     };
                     continue;
+                }
+
+                if let Some(filter) = &self.commit_filter {
+                    let rel = src_path.strip_prefix(src_root).unwrap_or(&src_path);
+                    if filter.should_skip(rel, &src_path) {
+                        continue;
+                    }
+                    if ft.is_dir() && filter.is_skipped_dir(rel) {
+                        continue;
+                    }
                 }
 
                 if ft.is_dir() {

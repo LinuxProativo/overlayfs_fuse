@@ -3,6 +3,7 @@
 //! This crate provides a FUSE-based overlay filesystem structure
 //! with automated layer management.
 
+mod commit_filter;
 mod files;
 mod fuse_ops;
 mod inode;
@@ -12,6 +13,13 @@ mod overlay;
 /// Defines how inodes are handled, including mapping and generation strategies
 /// between the underlying storage and the virtual filesystem.
 pub use inode::InodeMode;
+
+
+/// Commit-time filtering for rootfs-aware overlays.
+/// Use [`CommitFilter::rootfs()`] as the starting point when the overlay wraps
+/// a Linux rootfs managed by `bwrap` or `proot`, then chain builder calls to
+/// add project-specific exclusions.
+pub use commit_filter::CommitFilter;
 
 
 /// Core components for managing the overlay lifecycle, including

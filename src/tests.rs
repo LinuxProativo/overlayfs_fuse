@@ -3,6 +3,7 @@ use crate::inode::{InodeMode, InodeStore};
 use crate::InodeMode::Persistent;
 use std::fs;
 use std::os::unix;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 fn tmp(name: &str) -> PathBuf {
@@ -473,6 +474,140 @@ fn test_rename_from_lower() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+fn mkfile(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
+    let p = dir.join(name);
+    fs::write(&p, content).unwrap();
+    p
+}
+
+fn chmod(path: &Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[test]
+fn test_filter_skip_dirs_single_and_batch() {
+    let filter = CommitFilter::new()
+        .skip_dir("/dev")
+        .skip_dirs(["/proc", "/sys"]);
+
+    assert!(filter.should_skip(Path::new("dev"), Path::new("/upper/dev")));
+    assert!(filter.should_skip(Path::new("proc"), Path::new("/upper/proc")));
+    assert!(filter.should_skip(Path::new("sys"), Path::new("/upper/sys")));
+    assert!(filter.should_skip(Path::new("dev/null"), Path::new("/upper/dev/null")));
+    assert!(filter.should_skip(Path::new("proc/1/maps"), Path::new("/upper/proc/1/maps")));
+    assert!(!filter.should_skip(Path::new("devices"), Path::new("/upper/devices")));
+    assert!(!filter.should_skip(Path::new("etc/passwd"), Path::new("/upper/etc/passwd")));
+}
+
+#[test]
+fn test_filter_skip_files_single_and_batch() {
+    let filter = CommitFilter::new()
+        .skip_file("lost+found")
+        .skip_files(["__pycache__", ".DS_Store"]);
+
+    assert!(filter.should_skip(Path::new("lost+found"), Path::new("/upper/lost+found")));
+    assert!(filter.should_skip(
+        Path::new("usr/lib/__pycache__"),
+        Path::new("/upper/usr/lib/__pycache__")
+    ));
+    assert!(filter.should_skip(
+        Path::new("home/user/.DS_Store"),
+        Path::new("/upper/home/user/.DS_Store")
+    ));
+    assert!(!filter.should_skip(
+        Path::new("not_lost+found"),
+        Path::new("/upper/not_lost+found")
+    ));
+    assert!(!filter.should_skip(Path::new("etc/passwd"), Path::new("/upper/etc/passwd")));
+}
+
+#[test]
+fn test_filter_skip_zero_permissions() {
+    let tmp = tmp("filter_zero_perm_test");
+    fs::create_dir_all(&tmp).unwrap();
+
+    let zero_file = mkfile(&tmp, "stub", b"");
+    let normal_file = mkfile(&tmp, "normal", b"data");
+    chmod(&zero_file, 0o000);
+    chmod(&normal_file, 0o644);
+
+    let filter = CommitFilter::new().skip_zero_permissions(true);
+
+    assert!(filter.should_skip(Path::new("stub"), &zero_file));
+    assert!(!filter.should_skip(Path::new("normal"), &normal_file));
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_filter_skip_empty_files_in() {
+    let tmp = tmp("filter_empty_files_test");
+
+    let cache_dir = tmp.join("var/cache/apt");
+    let etc_dir = tmp.join("etc");
+    fs::create_dir_all(&cache_dir).unwrap();
+    fs::create_dir_all(&etc_dir).unwrap();
+
+    let empty_in_cache = mkfile(&cache_dir, "pkgcache.bin", b"");
+    let nonempty_in_cache = mkfile(&cache_dir, "real.db", b"data");
+    let empty_in_etc = mkfile(&etc_dir, "passwd", b"");
+    let filter = CommitFilter::new().skip_empty_files_in("/var/cache");
+
+    assert!(
+        filter.should_skip(Path::new("var/cache/apt/pkgcache.bin"), &empty_in_cache),
+        "zero-byte file inside skip_empty_files_in dir must be skipped"
+    );
+    assert!(
+        !filter.should_skip(Path::new("var/cache/apt/real.db"), &nonempty_in_cache),
+        "non-empty file inside skip_empty_files_in dir must be allowed"
+    );
+    assert!(
+        !filter.should_skip(Path::new("etc/passwd"), &empty_in_etc),
+        "zero-byte file outside skip_empty_files_in dir must be allowed"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_filter_commit_atomic_skips_dirs() {
+    let tmp = tmp("filter_commit_atomic_test");
+    let lower = tmp.join("lower");
+
+    fs::create_dir_all(lower.join("etc")).unwrap();
+    fs::create_dir_all(lower.join("dev")).unwrap();
+    fs::write(lower.join("etc/os-release"), "ID=test").unwrap();
+
+    let mut overlay = OverlayFS::new(lower.clone());
+    overlay.set_commit_filter(CommitFilter::new().skip_dir("dev"));
+    overlay.mount().expect("mount failed");
+
+    let mount = overlay.handle().mount_point().to_path_buf();
+
+    fs::write(mount.join("etc/hostname"), "testbox").unwrap();
+    fs::write(mount.join("dev/null"), "").unwrap();
+
+    overlay.umount();
+    overlay.overlay_action(OverlayAction::CommitAtomic);
+
+    assert_eq!(
+        fs::read_to_string(lower.join("etc/hostname")).unwrap(),
+        "testbox",
+        "etc/hostname must be committed to lower"
+    );
+    assert!(
+        !lower.join("dev/null").exists() || fs::read(lower.join("dev/null")).unwrap().is_empty(),
+        "dev/null must not be committed to lower when dev is filtered"
+    );
+    assert_eq!(
+        fs::read_to_string(lower.join("etc/os-release")).unwrap(),
+        "ID=test",
+        "pre-existing lower files must be preserved"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn test_proot_meu_rootfs() {
     test_proot_alpine_apk_add_inner(Some(Path::new("/tmp/ALPack")));
@@ -517,24 +652,39 @@ fn test_proot_alpine_apk_add_inner(rootfs_override: Option<&Path>) {
     overlay.mount().expect("OverlayFS mount failed");
 
     let mount_point = overlay.handle().mount_point().to_path_buf();
-    let upper       = overlay.handle().upper().to_path_buf();
+    let upper = overlay.handle().upper().to_path_buf();
 
     let sh = mount_point.join("bin/sh");
     let busybox = mount_point.join("bin/busybox");
 
     eprintln!("mount_point: {:?}", mount_point);
-    eprintln!("bin/sh exists (symlink_metadata): {}", fs::symlink_metadata(&sh).is_ok());
-    eprintln!("bin/sh is_symlink: {}", sh.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false));
+    eprintln!(
+        "bin/sh exists (symlink_metadata): {}",
+        fs::symlink_metadata(&sh).is_ok()
+    );
+    eprintln!(
+        "bin/sh is_symlink: {}",
+        sh.symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+    );
     eprintln!("bin/sh read_link: {:?}", fs::read_link(&sh));
     eprintln!("bin/busybox exists: {}", busybox.exists());
-    eprintln!("bin/busybox symlink_metadata: {}", fs::symlink_metadata(&busybox).is_ok());
+    eprintln!(
+        "bin/busybox symlink_metadata: {}",
+        fs::symlink_metadata(&busybox).is_ok()
+    );
 
     if let Ok(entries) = fs::read_dir(mount_point.join("bin")) {
         let mut found_sh = false;
         for e in entries.flatten() {
             if e.file_name() == "sh" {
                 found_sh = true;
-                eprintln!("  FOUND /bin/sh  type={:?}  metadata={:?}", e.file_type(), e.metadata());
+                eprintln!(
+                    "  FOUND /bin/sh  type={:?}  metadata={:?}",
+                    e.file_type(),
+                    e.metadata()
+                );
             }
         }
         if !found_sh {
@@ -543,7 +693,10 @@ fn test_proot_alpine_apk_add_inner(rootfs_override: Option<&Path>) {
     }
 
     let lower_sh = rootfs.join("bin/sh");
-    eprintln!("lower bin/sh symlink_metadata: {}", fs::symlink_metadata(&lower_sh).is_ok());
+    eprintln!(
+        "lower bin/sh symlink_metadata: {}",
+        fs::symlink_metadata(&lower_sh).is_ok()
+    );
     eprintln!("lower bin/sh read_link: {:?}", fs::read_link(&lower_sh));
 
     let output = std::process::Command::new(&proot_bin)
@@ -570,10 +723,12 @@ fn test_proot_alpine_apk_add_inner(rootfs_override: Option<&Path>) {
 
     let lower_after = fs::read(&lower_installed).unwrap_or_default();
     assert_eq!(
-        lower_before, lower_after,
+        lower_before,
+        lower_after,
         "lower layer was modified in place — CoW isolation broken
          lower_before ({} bytes) != lower_after ({} bytes)",
-        lower_before.len(), lower_after.len(),
+        lower_before.len(),
+        lower_after.len(),
     );
 
     let installed_upper = upper.join("lib/apk/db/installed");

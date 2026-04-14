@@ -9,9 +9,11 @@
 //! - **Bind-mount targets** (`/tmp`, `/mnt`, `/home`, `/run`, `/media`) – these
 //!   are typically replaced wholesale by the sandbox and their upper-layer
 //!   shadows carry no meaningful state.
-//! - **Zero-permission files** (mode `0o000`) – these are almost always whiteout
-//!   artifacts, device stubs, or deliberately inaccessible entries that should
-//!   not propagate.
+//! - **Zero-permission files** (mode `0o000`) – these are almost always device
+//!   stubs or deliberately inaccessible entries that should not propagate.
+//! - **Empty files inside specific directories** – zero-byte regular files thattests.rs
+//!   appear in certain paths (e.g. `/var/cache`, `/var/log`) and are sandbox
+//!   artifacts with no meaningful content to persist.
 //! - **Custom paths / filenames** – caller-supplied lists for project-specific
 //!   exclusions.
 //!
@@ -24,73 +26,72 @@
 //!
 //! let mut overlay = OverlayFS::new(PathBuf::from("test"));
 //!
-//! let filter = CommitFilter::rootfs()          // sensible defaults for a rootfs overlay
-//!     .skip_dir("/opt/scratch")                // ignore an extra directory
-//!     .skip_file("lost+found")                 // ignore a specific filename anywhere
-//!     .skip_zero_permissions(true);            // already on for rootfs(), shown for clarity
+//! let filter = CommitFilter::rootfs()
+//!     .skip_dir("/opt/scratch")
+//!     .skip_dirs(["/var/tmp", "/var/run"])
+//!     .skip_file("lost+found")
+//!     .skip_files(["__pycache__", ".DS_Store"])
+//!     .skip_empty_files_in("/var/cache")
+//!     .skip_empty_files_in("/var/log")
+//!     .skip_zero_permissions(true);
 //!
 //! overlay.set_commit_filter(filter);
 //! ```
 
 use std::collections::HashSet;
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::fs;
 
-/// Controls which paths are excluded when committing upper-layer changes to lower.
+/// Sanitizes a path by removing the leading root slash if present.
 ///
-/// A path is skipped when **any** of the following conditions match:
+/// # Arguments
+/// * `p` - The path to be normalized.
 ///
-/// 1. Its exact filename appears in [`skip_files`] (applied at every depth).
-/// 2. Its root-relative path matches, or is a descendant of, an entry in
-///    [`skip_dirs`].
-/// 3. Its Unix permission bits are `0o000` and [`skip_zero_permissions`] is
-///    enabled (checked for non-symlink entries only, since symlinks always
-///    report `0o777` on Linux).
-///
-/// All checks are performed on the **relative** path inside the upper layer
-/// (i.e., the path as it would appear inside the mounted rootfs), so the caller
-/// does not need to know the physical location of the upper directory.
-///
-/// [`skip_files`]: CommitFilter::skip_files
-/// [`skip_dirs`]: CommitFilter::skip_dirs
-/// [`skip_zero_permissions`]: CommitFilter::skip_zero_permissions
-#[derive(Debug, Clone)]
-pub struct CommitFilter {
-    /// Root-relative directory paths to skip entirely (e.g. `"dev"`, `"proc"`).
-    ///
-    /// Each entry is matched against the leading components of the relative
-    /// path being committed.  A directory **and all its descendants** are
-    /// excluded when the relative path starts with one of these prefixes.
-    /// Comparisons are component-level (via `Path::strip_prefix`), so `"dev"`
-    /// never accidentally matches `"devices"`.
-    skip_dirs: HashSet<PathBuf>,
-
-    /// Exact file *names* (not full paths) that should never be committed,
-    /// regardless of the directory they live in.
-    ///
-    /// Useful for sentinel files like `lost+found`, `.gitkeep`, or overlay
-    /// opaque-whiteout markers (`.wh..wh..opq`) that should not leak into lower.
-    skip_files: HashSet<String>,
-
-    /// When `true`, any entry whose Unix permission bits are exactly `0o000`
-    /// is excluded from the commit.
-    ///
-    /// In rootfs overlays, these entries are typically kernel-managed device
-    /// stubs, intentionally inaccessible sockets, or artifacts left by the
-    /// sandbox runtime that carry no meaning in the lower layer.
-    skip_zero_permissions: bool,
+/// # Returns
+/// * A path slice without the leading `/`.
+fn normalise_dir(p: &Path) -> &Path {
+    p.strip_prefix("/").unwrap_or(p)
 }
 
-impl Default for CommitFilter {
-    /// Returns an empty filter that allows every entry through unchanged.
-    fn default() -> Self {
-        Self {
-            skip_dirs: HashSet::new(),
-            skip_files: HashSet::new(),
-            skip_zero_permissions: false,
-        }
-    }
+/// Checks if a given path is equal to or starts with a specific prefix.
+///
+/// # Arguments
+/// * `rel` - The relative path to check.
+/// * `prefix` - The prefix to look for.
+///
+/// # Returns
+/// * `true` if `rel` is within or equal to `prefix`.
+fn has_prefix(rel: &Path, prefix: &Path) -> bool {
+    rel == prefix || rel.strip_prefix(prefix).is_ok()
+}
+
+/// Controls which paths are excluded when committing upper-layer changes into
+/// the lower layer.
+///
+/// An entry is skipped when **any** of the following conditions match:
+///
+/// 1. Its exact filename appears in the `skip_files` set (checked at every depth).
+/// 2. Its root-relative path equals, or is a descendant of, a path in `skip_dirs`.
+/// 3. Its Unix permission bits are `0o000` and `skip_zero_permissions` is enabled
+///    (symlinks are exempt; Linux always reports `0o777` for them).
+/// 4. It is a zero-byte regular file whose root-relative parent directory is
+///    listed in `skip_empty_files_in`.
+///
+/// All checks operate on the **relative** path as it appears inside the mounted
+/// rootfs, so rules can be written in rootfs terms (`"dev"`, `"proc"`) without
+/// knowing the physical host location of the upper directory.
+#[derive(Debug, Clone, Default)]
+pub struct CommitFilter {
+    /// Root-relative directory paths whose entire subtree is excluded.
+    skip_dirs: HashSet<PathBuf>,
+    /// Exact filenames (bare name only, no directory component) that are
+    /// excluded regardless of where they appear in the tree.
+    skip_files: HashSet<String>,
+    /// Root-relative directories inside which zero-byte regular files are excluded.
+    skip_empty_files_in: HashSet<PathBuf>,
+    /// When `true`, any non-symlink entry with Unix mode `0o000` is excluded.
+    skip_zero_permissions: bool,
 }
 
 impl CommitFilter {
@@ -116,12 +117,11 @@ impl CommitFilter {
     /// | `/media` | Removable-media mount points; host-managed. |
     /// | `/home` | User home directories; bwrap bind-mounts the real home here. |
     ///
-    /// Zero-permission skipping is also enabled because rootfs overlays
+    /// Additionally, `skip_zero_permissions` is enabled because rootfs overlays
     /// routinely produce `0o000` stubs for `null`, `zero`, `random`, etc.
     pub fn rootfs() -> Self {
-        const ROOTFS_SKIP_DIRS: &[&str] = &[
-            "dev", "proc", "sys", "run", "tmp", "mnt", "media", "home",
-        ];
+        const ROOTFS_SKIP_DIRS: &[&str] =
+            &["dev", "proc", "sys", "run", "tmp", "mnt", "media", "home"];
 
         let mut filter = Self::new();
         filter.skip_zero_permissions = true;
@@ -129,7 +129,6 @@ impl CommitFilter {
         for dir in ROOTFS_SKIP_DIRS {
             filter.skip_dirs.insert(PathBuf::from(dir));
         }
-
         filter
     }
 
@@ -146,9 +145,30 @@ impl CommitFilter {
     /// # Returns
     /// * `Self` with the new exclusion added (a builder pattern).
     pub fn skip_dir(mut self, path: impl AsRef<Path>) -> Self {
-        let p = path.as_ref();
-        let stripped = p.strip_prefix("/").unwrap_or(p);
-        self.skip_dirs.insert(stripped.to_path_buf());
+        self.skip_dirs
+            .insert(normalise_dir(path.as_ref()).to_path_buf());
+        self
+    }
+
+    /// Excludes every directory in `paths` from the commit.
+    ///
+    /// Accepts any iterator whose items convert to `Path`, so you can pass
+    /// arrays, slices, or any other iterator directly.
+    ///
+    /// # Arguments
+    /// * `paths` - An iterator of paths to exclude.
+    ///
+    /// # Returns
+    /// * `Self` with the directory exclusions added.
+    pub fn skip_dirs<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        for p in paths {
+            self.skip_dirs
+                .insert(normalise_dir(p.as_ref()).to_path_buf());
+        }
         self
     }
 
@@ -164,6 +184,67 @@ impl CommitFilter {
     /// * `Self` with the filename exclusion added (a builder pattern).
     pub fn skip_file(mut self, name: impl Into<String>) -> Self {
         self.skip_files.insert(name.into());
+        self
+    }
+
+    /// Excludes every filename in `names` from the commit.
+    ///
+    /// Accepts any iterator whose items convert to `String`.
+    ///
+    /// # Arguments
+    /// * `names` - An iterator of filenames to exclude.
+    ///
+    /// # Returns
+    /// * `Self` with the filename exclusions added.
+    pub fn skip_files<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for n in names {
+            self.skip_files.insert(n.into());
+        }
+        self
+    }
+
+    /// Excludes zero-byte regular files found inside `dir` (at any depth).
+    ///
+    /// Unlike [`skip_dir`], the directory itself **is** committed — only
+    /// empty regular files within it are dropped.  This is useful for cache or
+    /// log directories where the sandbox creates placeholder files that have no
+    /// meaningful content to persist into the lower layer.
+    ///
+    /// A leading `/` is stripped, so `"/var/cache"` and `"var/cache"` are
+    /// equivalent.
+    ///
+    /// # Arguments
+    /// * `dir` - The directory path inside which empty files will be ignored.
+    ///
+    /// # Returns
+    /// * `Self` with the rule added.
+    pub fn skip_empty_files_in(mut self, dir: impl AsRef<Path>) -> Self {
+        self.skip_empty_files_in
+            .insert(normalise_dir(dir.as_ref()).to_path_buf());
+        self
+    }
+
+    /// Excludes zero-byte regular files found inside every directory in `dirs`.
+    /// Batch variant of [`skip_empty_files_in`].
+    ///
+    /// # Arguments
+    /// * `dirs` - An iterator of directory paths.
+    ///
+    /// # Returns
+    /// * `Self` with the rules added.
+    pub fn skip_empty_files_in_dirs<I, P>(mut self, dirs: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        for d in dirs {
+            self.skip_empty_files_in
+                .insert(normalise_dir(d.as_ref()).to_path_buf());
+        }
         self
     }
 
@@ -205,17 +286,28 @@ impl CommitFilter {
         }
 
         for skipped in &self.skip_dirs {
-            if rel == skipped || rel.strip_prefix(skipped).is_ok() {
+            if has_prefix(rel, skipped) {
                 return true;
             }
         }
 
-        if self.skip_zero_permissions {
+        if self.skip_zero_permissions || !self.skip_empty_files_in.is_empty() {
             if let Ok(meta) = fs::symlink_metadata(abs_upper) {
-                if !meta.file_type().is_symlink() {
-                    let mode = meta.permissions().mode() & 0o777;
-                    if mode == 0 {
+                let ft = meta.file_type();
+
+                if self.skip_zero_permissions && !ft.is_symlink() {
+                    if meta.permissions().mode() & 0o777 == 0 {
                         return true;
+                    }
+                }
+
+                if ft.is_file() && meta.len() == 0 && !self.skip_empty_files_in.is_empty() {
+                    let mut ancestor = rel.parent();
+                    while let Some(dir) = ancestor {
+                        if self.skip_empty_files_in.contains(dir) {
+                            return true;
+                        }
+                        ancestor = dir.parent();
                     }
                 }
             }
@@ -224,14 +316,14 @@ impl CommitFilter {
         false
     }
 
-    /// Returns `true` if `rel` is, or is a descendant of, a directory listed
-    /// in `skip_dirs`.
+    /// Checks if a specific directory path is marked as skipped.
     ///
-    /// Used by traversal loops to avoid calling `read_dir` on directories that
-    /// would be excluded anyway, saving unnecessary syscalls.
+    /// # Arguments
+    /// * `rel` - The relative path of the directory.
+    ///
+    /// # Returns
+    /// * `true` if the directory or any of its parent directories are in `skip_dirs`.
     pub(crate) fn is_skipped_dir(&self, rel: &Path) -> bool {
-        self.skip_dirs
-            .iter()
-            .any(|d| rel == d || rel.strip_prefix(d).is_ok())
+        self.skip_dirs.iter().any(|d| has_prefix(rel, d))
     }
 }
