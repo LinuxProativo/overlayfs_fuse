@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="logo.png" alt="ALPack" width="300"/>
+  <img src="logo.png" width="300"/>
 </p>
 
 <h1 align="center">OverlayFS Fuse - A FUSE-based Overlay Filesystem</h1>
-<h3 align="center">Lightweight FUSE Overlay Filesystem for Portable Linux Environments.</h1>
+<h3 align="center">Lightweight FUSE Overlay Filesystem for Portable Linux Environments.</h3>
 
 <p align="center">
     <img src="https://img.shields.io/badge/Platform-POSIX-FCC624?&logo=linux&style=flat-square"/>
@@ -40,7 +40,7 @@ in many environments.
 The system works by combining three layers:
 
 | Layer          | Role                                    |
-| -------------- | --------------------------------------- |
+|----------------|-----------------------------------------|
 | **Lower**      | Original read-only filesystem           |
 | **Upper**      | Writable layer containing modifications |
 | **Mountpoint** | Unified view exposed to applications    |
@@ -160,7 +160,7 @@ The new naming convention uses session IDs and timestamps, allowing multiple ins
 of the same application or parallel tests to run without directory collisions.
 
 ```rust
-// Each instance automatically generates a unique path, for example:
+// Each instance automatically generates a unique path, for example,
 // Instance 1: /tmp/mount_myapp_a1b2c3d4_1715631234567890123
 // Instance 2: /tmp/mount_myapp_e5f6g7h8_1715631234567999999
 let mut inst1 = OverlayFS::new(PathBuf::from("/app"));
@@ -172,23 +172,23 @@ inst2.mount().unwrap(); // No "Directory already exists" error!
 
 ## 📚 OverlayAction Reference
 
-| Action | Behaviour |
-|---|---|
-| `Preserve` | Upper layer kept on disk; mount point removed. |
-| `Discard` | Upper layer and mount point deleted entirely. |
-| `Commit` | Upper merged into lower (whiteouts processed); both cleaned up. |
+| Action         | Behaviour                                                         |
+|----------------|-------------------------------------------------------------------|
+| `Preserve`     | Upper layer kept on disk; mount point removed.                    |
+| `Discard`      | Upper layer and mount point deleted entirely.                     |
+| `Commit`       | Upper merged into lower (whiteouts processed); both cleaned up.   |
 | `CommitAtomic` | Backup-and-swap merge; upper removed only after successful write. |
 
 ## 📂 Path Conventions 
 
 Given `OverlayFS::new(PathBuf::from("/base/dir"))`:
 
-| Layer | Default path | Description |
-|---|---|---|
-| **Lower (Read-Only)** | `/base/dir` | The original base directory. |
-| **Upper (Read-Write)** | `/base/dir_upper` | Stores modifications (no longer a hidden dot-folder). |
-| **Mount Point** | `/tmp/mount_dir_id_ts` | Unique, collision-resistant path in the system temp folder. |
-| **Mount Point as Home** | `~/.cache/mount_dir_id_ts` | Used if `.mountpoint_as_home()` is enabled. |
+| Layer                   | Default path               | Description                                                 |
+|-------------------------|----------------------------|-------------------------------------------------------------|
+| **Lower (Read-Only)**   | `/base/dir`                | The original base directory.                                |
+| **Upper (Read-Write)**  | `/base/dir_upper`          | Stores modifications (no longer a hidden dot-folder).       |
+| **Mount Point**         | `/tmp/mount_dir_id_ts`     | Unique, collision-resistant path in the system temp folder. |
+| **Mount Point as Home** | `~/.cache/mount_dir_id_ts` | Used if `.mountpoint_as_home()` is enabled.                 |
 
 ### ⚠️ Configuration Rules
 
@@ -228,7 +228,7 @@ src/
 
 ## 📜 MIT License
 
-This repository has scripts that were created to be free software.
+This repository has scripts created to be free software.
 Therefore, they can be distributed and/or modified within the terms of the ***MIT License***.
 
 > ### See the [LICENSE](LICENSE) file for details.
