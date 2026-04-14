@@ -122,7 +122,6 @@ fn test_overlay_commit_with_deletion() {
     assert!(!lower.join("to_delete.txt").exists());
 }
 
-/// Mesmo path deve retornar o mesmo inode em chamadas subsequentes.
 #[test]
 fn test_inode_virtual_stability() {
     let store = InodeStore::new(InodeMode::Virtual);
@@ -134,7 +133,6 @@ fn test_inode_virtual_stability() {
     assert_eq!(ino1, ino2, "mesmo path deve retornar mesmo inode");
 }
 
-/// Paths diferentes devem receber inodes distintos.
 #[test]
 fn test_inode_virtual_distinct_paths() {
     let store = InodeStore::new(InodeMode::Virtual);
@@ -145,8 +143,6 @@ fn test_inode_virtual_distinct_paths() {
     assert_ne!(a, b);
 }
 
-/// No modo Persistent o mesmo path deve sempre gerar o mesmo inode,
-/// inclusive em uma instância nova do store (hash determinístico).
 #[test]
 fn test_inode_persistent_deterministic() {
     let path = Path::new("usr/bin/env");
@@ -160,7 +156,6 @@ fn test_inode_persistent_deterministic() {
     );
 }
 
-/// Dois paths distintos não devem colidir no modo Persistent.
 #[test]
 fn test_inode_persistent_no_collision() {
     let store = InodeStore::new(Persistent);
@@ -171,7 +166,6 @@ fn test_inode_persistent_no_collision() {
     assert_ne!(a, b);
 }
 
-/// Após remove_ino, o path deve receber um inode novo.
 #[test]
 fn test_inode_remove_and_reassign() {
     let store = InodeStore::new(InodeMode::Virtual);
@@ -181,15 +175,11 @@ fn test_inode_remove_and_reassign() {
     store.remove_ino(path);
     let reassigned = store.get_ino(path);
 
-    // No modo Virtual o novo inode virá do contador, portanto será diferente.
     assert_ne!(original, reassigned);
-    // E o mapeamento reverso deve funcionar para o novo.
     assert_eq!(store.get_path(reassigned), Some(path.to_path_buf()));
-    // O inode antigo não deve mais estar mapeado.
     assert_eq!(store.get_path(original), None);
 }
 
-/// remove_subtree deve limpar o path raiz e todos os descendentes.
 #[test]
 fn test_inode_remove_subtree() {
     let store = InodeStore::new(InodeMode::Virtual);
@@ -209,16 +199,12 @@ fn test_inode_remove_subtree() {
     assert_eq!(store.get_path(ino_deep), None);
 }
 
-/// Concorrência: N threads chamando get_ino para o mesmo path simultaneamente
-/// devem todas receber o mesmo inode (sem duplicatas).
 #[test]
 fn test_inode_concurrent_get_ino() {
     use std::sync::Arc;
 
     let store = Arc::new(InodeStore::new(Persistent));
     let path = Path::new("concurrent/path");
-
-    // Seed o inode antes para garantir que o fast-path também é exercitado.
     let expected = store.get_ino(path);
 
     let handles: Vec<_> = (0..16)
@@ -234,7 +220,6 @@ fn test_inode_concurrent_get_ino() {
     }
 }
 
-/// Symlink criado no lower deve ser visível através do mount.
 #[test]
 fn test_symlink_visible_from_lower() {
     let tmp = tmp("symlink_lower_test");
@@ -255,7 +240,6 @@ fn test_symlink_visible_from_lower() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// Symlink criado via mount deve aparecer no upper (não seguido durante CoW).
 #[test]
 fn test_symlink_cow_stays_as_symlink() {
     let tmp = tmp("symlink_cow_test");
@@ -287,7 +271,6 @@ fn test_symlink_cow_stays_as_symlink() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// Symlink pendurado (dangling) no lower não deve travar o mount nem o readdir.
 #[test]
 fn test_dangling_symlink_in_lower() {
     let tmp = tmp("dangling_symlink_test");
@@ -302,7 +285,6 @@ fn test_dangling_symlink_in_lower() {
 
     let mount = overlay.handle().mount_point().to_path_buf();
 
-    // readdir não deve falhar por causa do symlink pendurado
     let entries: Vec<_> = fs::read_dir(&mount)
         .expect("readdir não deve falhar")
         .flatten()
@@ -311,15 +293,12 @@ fn test_dangling_symlink_in_lower() {
 
     assert!(entries.contains(&"normal.txt".to_string()));
     assert!(entries.contains(&"dangling".to_string()));
-
-    // leitura do arquivo normal ainda funciona
     assert_eq!(fs::read_to_string(mount.join("normal.txt")).unwrap(), "ok");
 
     overlay.umount();
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// Deletar arquivo do lower via mount deve criar whiteout e ocultar o arquivo.
 #[test]
 fn test_whiteout_hides_lower_file() {
     let tmp = tmp("whiteout_test");
@@ -340,14 +319,12 @@ fn test_whiteout_hides_lower_file() {
 
     overlay.umount();
 
-    // whiteout deve existir no upper
     let wh = overlay.handle().upper().join(".wh.ghost.txt");
     assert!(wh.exists(), "whiteout deve estar presente no upper");
 
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// rmdir em diretório com conteúdo visível deve retornar ENOTEMPTY.
 #[test]
 fn test_rmdir_notempty() {
     let tmp = tmp("rmdir_notempty_test");
@@ -366,7 +343,6 @@ fn test_rmdir_notempty() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// rmdir deve funcionar após todos os filhos serem deletados.
 #[test]
 fn test_rmdir_after_emptying() {
     let tmp = tmp("rmdir_empty_test");
@@ -387,7 +363,6 @@ fn test_rmdir_after_emptying() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// CommitAtomic deve mesclar mudanças e deletar o upper ao final.
 #[test]
 fn test_commit_atomic_basic() {
     let tmp = tmp("commit_atomic_test");
@@ -417,7 +392,6 @@ fn test_commit_atomic_basic() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// CommitAtomic deve processar whiteouts — arquivos deletados não devem existir no lower.
 #[test]
 fn test_commit_atomic_with_deletion() {
     let tmp = tmp("commit_atomic_del_test");
@@ -440,7 +414,6 @@ fn test_commit_atomic_with_deletion() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// Modificar arquivo do lower via mount deve promovê-lo ao upper sem alterar o lower.
 #[test]
 fn test_cow_does_not_modify_lower() {
     let tmp = tmp("cow_test");
@@ -455,12 +428,11 @@ fn test_cow_does_not_modify_lower() {
 
     overlay.umount();
 
-    // lower intocado
     assert_eq!(
         fs::read_to_string(lower.join("data.txt")).unwrap(),
         "original"
     );
-    // upper tem a versão modificada
+
     assert_eq!(
         fs::read_to_string(overlay.handle().upper().join("data.txt")).unwrap(),
         "modified"
@@ -469,8 +441,6 @@ fn test_cow_does_not_modify_lower() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// Renomear arquivo do lower deve criar whiteout no caminho antigo
-/// e mover o arquivo para o upper no caminho novo.
 #[test]
 fn test_rename_from_lower() {
     let tmp = tmp("rename_test");
