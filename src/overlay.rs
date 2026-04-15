@@ -8,8 +8,10 @@ use crate::files::OverlayFiles;
 use crate::fuse_ops::OverlayOps;
 use crate::layers::WH_PREFIX;
 use crate::InodeMode;
+// use fs_extra::dir::{copy, CopyOptions};
 use fuser::{BackgroundSession, Config, MountOption, SessionACL};
 use libc::{lgetxattr, llistxattr, lsetxattr};
+use recursive_copy::CopyOptions;
 use std::ffi::CString;
 use std::io::{Error, Result};
 use std::os::unix;
@@ -243,7 +245,7 @@ impl OverlayFS {
                 if !self.is_mounted() {
                     break;
                 }
-                sleep(Duration::from_millis(50));
+                sleep(Duration::from_millis(100));
             }
         }
 
@@ -256,7 +258,7 @@ impl OverlayFS {
         }
 
         if self.files.mount_point.exists() {
-            let _ = fs::remove_dir(&self.files.mount_point);
+            let _ = fs::remove_dir_all(&self.files.mount_point);
         }
     }
 
@@ -310,22 +312,19 @@ impl OverlayFS {
             OverlayAction::Preserve => (),
             OverlayAction::Discard => {
                 let _ = obliterate::ensure_removed(&self.files.upper);
-                let _ = fs::remove_dir_all(&self.files.mount_point);
             }
             OverlayAction::Commit => {
-                let result = self.commit_changes(&self.files.upper, &self.files.lower);
-                let _ = obliterate::ensure_removed(&self.files.upper);
-                let _ = fs::remove_dir_all(&self.files.mount_point);
-                if let Err(e) = result {
+                if let Err(e) = self.commit_changes(&self.files.upper, &self.files.lower) {
                     eprintln!("Failed to commit changes: {}", e);
+                } else {
+                    let _ = obliterate::ensure_removed(&self.files.upper);
                 }
             }
             OverlayAction::CommitAtomic => {
-                let result = self.commit_atomic(&self.files.upper, &self.files.lower);
-                let _ = obliterate::ensure_removed(&self.files.upper);
-                let _ = fs::remove_dir_all(&self.files.mount_point);
-                if let Err(e) = result {
+                if let Err(e) = self.commit_atomic(&self.files.upper, &self.files.lower) {
                     eprintln!("Failed to commit atomic changes: {}", e);
+                } else {
+                    let _ = obliterate::ensure_removed(&self.files.upper);
                 }
             }
         }
@@ -357,7 +356,6 @@ impl OverlayFS {
             dir.sync_all()?;
         }
 
-        fs::remove_dir_all(src)?;
         Ok(())
     }
 
@@ -386,17 +384,23 @@ impl OverlayFS {
         let backup_lower = dst.with_extension("backup");
 
         if new_lower.exists() {
-            fs::remove_dir_all(&new_lower)?;
+            obliterate::ensure_removed(&new_lower).ok();
         }
         if backup_lower.exists() {
-            fs::remove_dir_all(&backup_lower)?;
+            obliterate::ensure_removed(&backup_lower).ok();
         }
 
-        self.copy_tree(dst, &new_lower)?;
+        recursive_copy::copy_recursive(dst, &new_lower, &CopyOptions::default())
+            .map_err(|e| Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
         if let Err(e) = self.commit_copy_phase(src, &new_lower) {
-            fs::remove_dir_all(&new_lower).ok();
+            obliterate::ensure_removed(&new_lower).ok();
             return Err(e);
+        }
+
+        {
+            let dir = fs::File::open(&new_lower)?;
+            dir.sync_all()?;
         }
 
         fs::rename(dst, &backup_lower)?;
@@ -406,17 +410,11 @@ impl OverlayFS {
             return Err(e);
         }
 
-        fs::remove_dir_all(&backup_lower).ok();
-        fs::remove_dir_all(src).ok();
+        obliterate::ensure_removed(&backup_lower).ok();
         Ok(())
     }
 
     /// Recursively copies an entire directory tree from source to destination.
-    ///
-    /// Used by [`commit_atomic`] to snapshot the current lower layer before the
-    /// merge begins.  If a [`CommitFilter`] is configured, directories and files
-    /// that would be excluded from the commit are also excluded from the snapshot,
-    /// avoiding unnecessary I/O for virtual or bind-mounted subtrees.
     ///
     /// # Arguments
     /// * `src` - The source directory path.
@@ -425,54 +423,24 @@ impl OverlayFS {
     /// # Returns
     /// * `Ok(())` if the entire tree is copied successfully.
     /// * `Err` if any I/O error occurs during traversal or copying.
-    fn copy_tree(&self, src: &Path, dst: &Path) -> Result<()> {
-        let src_root = src;
-        if !dst.exists() {
-            fs::create_dir_all(dst)?;
-        }
-
-        let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
-
-        while let Some((current_src, current_dst)) = stack.pop() {
-            let entries = fs::read_dir(&current_src)?;
-
-            for entry in entries {
-                let entry = entry?;
-                let name = entry.file_name();
-                let src_path = entry.path();
-                let dst_path = current_dst.join(&name);
-                let ft = entry.file_type()?;
-
-                if let Some(filter) = &self.commit_filter {
-                    let rel = src_path.strip_prefix(src_root).unwrap_or(&src_path);
-                    if filter.should_skip(rel, &src_path) {
-                        continue;
-                    }
-                    if ft.is_dir() && filter.is_skipped_dir(rel) {
-                        continue;
-                    }
-                }
-
-                if ft.is_dir() {
-                    if !dst_path.exists() {
-                        fs::create_dir_all(&dst_path)?;
-                    }
-                    self.sync_metadata(&src_path, &dst_path)?;
-                    stack.push((src_path, dst_path));
-                } else if ft.is_symlink() {
-                    let target = fs::read_link(&src_path)?;
-                    if dst_path.exists() {
-                        let _ = fs::remove_file(&dst_path);
-                    }
-                    unix::fs::symlink(target, &dst_path)?;
-                    self.sync_metadata(&src_path, &dst_path)?;
-                } else {
-                    self.copy_if_different(&src_path, &dst_path)?;
-                }
-            }
-        }
-        Ok(())
-    }
+    // fn copy_tree(&self, src: &Path, dst: &Path) -> Result<()> {
+    //     if !dst.exists() {
+    //         fs::create_dir_all(dst)?;
+    //     }
+    //
+    //     let mut options = CopyOptions::new();
+    //     options.content_only = true;
+    //     options.overwrite = true;
+    //
+    //     copy(src, dst, &options).map_err(|e| {
+    //         Error::new(
+    //             std::io::ErrorKind::Other,
+    //             format!("fs_extra error: {} (src: {:?}, dst: {:?})", e, src, dst),
+    //         )
+    //     })?;
+    //
+    //     Ok(())
+    // }
 
     /// Synchronizes changes from the upper layer back to the lower layer.
     ///

@@ -80,6 +80,7 @@ fn test_custom_upper_path() {
 
     let overlay_default = OverlayFS::new(lower);
     assert_eq!(overlay_default.handle().upper(), tmp.join("lower_upper"));
+    let _ = fs::remove_dir_all(&tmp);
 }
 
 #[test]
@@ -105,6 +106,7 @@ fn test_overlay_commit() {
     assert!(final_file.exists());
     assert_eq!(fs::read_to_string(final_file).unwrap(), "new data");
     assert!(!overlay.handle().upper().exists());
+    let _ = fs::remove_dir_all(&tmp);
 }
 
 #[test]
@@ -121,6 +123,7 @@ fn test_overlay_commit_with_deletion() {
     overlay.overlay_action(OverlayAction::Commit);
 
     assert!(!lower.join("to_delete.txt").exists());
+    let _ = fs::remove_dir_all(&tmp);
 }
 
 #[test]

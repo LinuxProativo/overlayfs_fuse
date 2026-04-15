@@ -1,7 +1,10 @@
+Wed Apr 15 10:10:13 -03 2026:
+    - Replaced internal copy_tree with recursive_copy for improved reliability during the atomic commit process.
+    - The upper layer is no longer removed if a commit fails, preserving user data for subsequent attempts.
+    - Adopted obliterate within the commit_atomic process for safer and more thorough removal of temporary directories.
 Tue Apr 14 15:24:56 -03 2026:
     - Introduced CommitFilter to selectively exclude files and directories from being committed to the lower layer.
-        - Features a rootfs preset to automatically skip virtual, kernel-managed, and volatile paths
-        (e.g., /proc, /sys, /dev, /run).
+        - Features a rootfs preset to automatically skip virtual, kernel-managed, and volatile paths.
         - Supports custom exclusion rules for specific filenames, directory subtrees, and zero-byte files
           within designated paths.
     - Replaced remove_dir_all with obliterate for post-overlay cleanup to ensure more reliable directory removal.
