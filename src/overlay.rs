@@ -8,10 +8,10 @@ use crate::files::OverlayFiles;
 use crate::fuse_ops::OverlayOps;
 use crate::layers::WH_PREFIX;
 use crate::InodeMode;
-// use fs_extra::dir::{copy, CopyOptions};
 use fuser::{BackgroundSession, Config, MountOption, SessionACL};
 use libc::{lgetxattr, llistxattr, lsetxattr};
 use recursive_copy::CopyOptions;
+use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::io::{Error, Result};
 use std::os::unix;
@@ -23,7 +23,7 @@ use std::time::Duration;
 use std::{fs, ptr};
 
 /// Defines the finalization strategy for the upper layer when the filesystem is closed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OverlayAction {
     /// Keep the upper layer files as they are.
     Preserve,

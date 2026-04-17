@@ -181,11 +181,11 @@ impl OverlayOps {
             libc::lchown(dst_c.as_ptr(), meta.uid(), meta.gid());
             let times = [
                 libc::timespec {
-                    tv_sec: meta.atime() as libc::time_t,
+                    tv_sec: meta.atime() as _, // FIX libc::time_m 32bit
                     tv_nsec: meta.atime_nsec() as libc::c_long,
                 },
                 libc::timespec {
-                    tv_sec: meta.mtime() as libc::time_t,
+                    tv_sec: meta.mtime() as _, // FIX libc::time_m 32bit
                     tv_nsec: meta.mtime_nsec() as libc::c_long,
                 },
             ];
@@ -467,7 +467,7 @@ impl Filesystem for OverlayOps {
                             .duration_since(SystemTime::UNIX_EPOCH)
                             .unwrap_or_default();
                         libc::timespec {
-                            tv_sec: d.as_secs() as libc::time_t,
+                            tv_sec: d.as_secs() as _, // FIX libc::time_m 32bit
                             tv_nsec: d.subsec_nanos() as libc::c_long,
                         }
                     }

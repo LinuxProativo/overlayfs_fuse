@@ -9,9 +9,10 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use serde::{Deserialize, Serialize};
 
 /// Defines the strategy for generating inode numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InodeMode {
     /// Inodes are generated sequentially and are not preserved across mounts.
     Virtual,

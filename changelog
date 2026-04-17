@@ -1,3 +1,6 @@
+Fri Apr 17 20:40:11 -03 2026:
+    - Implement serde::Serialize and serde::Deserialize for IndeMode and OverlayAction.
+    - Resolve libc::time_t 32-bit compatibility warning for musl targets.
 Wed Apr 15 10:10:13 -03 2026:
     - Replaced internal copy_tree with recursive_copy for improved reliability during the atomic commit process.
     - The upper layer is no longer removed if a commit fails, preserving user data for subsequent attempts.
