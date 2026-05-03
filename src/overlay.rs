@@ -3,11 +3,11 @@
 //! This module coordinates the mounting, unmounting, and synchronization
 //! (commit/discard) of the overlay layers using FUSE.
 
-use crate::commit_filter::CommitFilter;
-use crate::files::OverlayFiles;
-use crate::fuse_ops::OverlayOps;
-use crate::layers::WH_PREFIX;
 use crate::InodeMode;
+use crate::filter::CommitFilter;
+use crate::files::OverlayFiles;
+use crate::fuse::OverlayOps;
+use crate::layers::WH_PREFIX;
 use fuser::{BackgroundSession, Config, MountOption, SessionACL};
 use libc::{lgetxattr, llistxattr, lsetxattr};
 use recursive_copy::CopyOptions;
@@ -118,6 +118,25 @@ impl OverlayFS {
             "Cannot change upper layer path while the filesystem is mounted"
         );
         self.files.upper = path;
+        self
+    }
+
+    /// Overrides the default mount point path.
+    ///
+    /// # Arguments
+    /// * `path` - A `PathBuf` representing the desired mount point.
+    ///
+    /// # Returns
+    /// * A mutable reference to `Self` for method chaining.
+    ///
+    /// # Panics
+    /// If the overlay is already mounted.
+    pub fn set_mount(&mut self, path: PathBuf) -> &mut Self {
+        assert!(
+            !self.is_mounted(),
+            "Cannot change mount point while the filesystem is mounted"
+        );
+        self.files.mount_point = path;
         self
     }
 
@@ -390,7 +409,7 @@ impl OverlayFS {
             obliterate::ensure_removed(&backup_lower).ok();
         }
 
-        recursive_copy::copy_recursive(dst, &new_lower, &CopyOptions::default())
+        recursive_copy::copy_all(dst, &new_lower, &CopyOptions::default())
             .map_err(|e| Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
         if let Err(e) = self.commit_copy_phase(src, &new_lower) {

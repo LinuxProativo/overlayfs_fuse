@@ -303,13 +303,13 @@ The version 1.1.0 introduces strict state management to prevent common developme
 
 ```
 src/
-├── lib.rs             # Public API re-exports
-├── overlay.rs         # OverlayFS controller, commit strategies, xattr utilities
-├── commit_filter.rs   # CommitFilter: rootfs-aware commit exclusion rules
-├── layers.rs          # LayerManager: resolve, CoW, whiteout management
-├── inode.rs           # InodeStore: thread-safe inode ↔ path mapping
-├── files.rs           # OverlayFiles: layer path configuration
-└── fuse_ops.rs        # FUSE operation handlers
+├── lib.rs        # Public API re-exports
+├── overlay.rs    # OverlayFS controller, commit strategies, xattr utilities
+├── filter.rs     # CommitFilter: rootfs-aware commit exclusion rules
+├── layers.rs     # LayerManager: resolve, CoW, whiteout management
+├── inode.rs      # InodeStore: thread-safe inode ↔ path mapping
+├── files.rs      # OverlayFiles: layer path configuration
+└── fuse.rs       # FUSE operation handlers
 ```
 
 ## 📜 MIT License

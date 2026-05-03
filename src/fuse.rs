@@ -1095,7 +1095,7 @@ impl Filesystem for OverlayOps {
     /// The `OpenOptions` **must** include `.truncate(false)`.  Without it,
     /// opening an already-existing upper-layer file with `O_WRONLY | O_CREAT`
     /// would silently truncate the file to zero before writing, corrupting any
-    /// content outside the range `[offset, offset + data.len())` — a classic
+    /// content outside the range `[offset, offset + data.len()]` — a classic
     /// TOCTOU-style data-loss bug.
     fn write(
         &self,

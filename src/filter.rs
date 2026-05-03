@@ -11,7 +11,7 @@
 //!   shadows carry no meaningful state.
 //! - **Zero-permission files** (mode `0o000`) – these are almost always device
 //!   stubs or deliberately inaccessible entries that should not propagate.
-//! - **Empty files inside specific directories** – zero-byte regular files thattests.rs
+//! - **Empty files inside specific directories** – zero-byte regular files that
 //!   appear in certain paths (e.g. `/var/cache`, `/var/log`) and are sandbox
 //!   artifacts with no meaningful content to persist.
 //! - **Custom paths / filenames** – caller-supplied lists for project-specific
@@ -33,7 +33,9 @@
 //!     .skip_files(["__pycache__", ".DS_Store"])
 //!     .skip_empty_files_in("/var/cache")
 //!     .skip_empty_files_in("/var/log")
-//!     .skip_zero_permissions(true);
+//!     .skip_zero_permissions(true)
+//!     .skip_regex(r".*\.tmp$")
+//!     .skip_glob("**/*.bak");
 //!
 //! overlay.set_commit_filter(filter);
 //! ```
@@ -42,6 +44,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use regex::Regex;
+use glob::Pattern;
 
 /// Sanitizes a path by removing the leading root slash if present.
 ///
@@ -77,6 +81,8 @@ fn has_prefix(rel: &Path, prefix: &Path) -> bool {
 ///    (symlinks are exempt; Linux always reports `0o777` for them).
 /// 4. It is a zero-byte regular file whose root-relative parent directory is
 ///    listed in `skip_empty_files_in`.
+/// 5. Its root-relative path matches a provided regular expression.
+/// 6. Its root-relative path matches a provided glob pattern.
 ///
 /// All checks operate on the **relative** path as it appears inside the mounted
 /// rootfs, so rules can be written in rootfs terms (`"dev"`, `"proc"`) without
@@ -92,6 +98,10 @@ pub struct CommitFilter {
     skip_empty_files_in: HashSet<PathBuf>,
     /// When `true`, any non-symlink entry with Unix mode `0o000` is excluded.
     skip_zero_permissions: bool,
+    /// Regular expressions matched against the full root-relative path.
+    skip_regexes: Vec<Regex>,
+    /// Glob patterns matched against the full root-relative path.
+    skip_globs: Vec<Pattern>,
 }
 
 impl CommitFilter {
@@ -263,6 +273,41 @@ impl CommitFilter {
         self
     }
 
+    /// Adds a regular expression pattern that should be excluded from the commit.
+    ///
+    /// The regex is matched against the full root-relative path of each entry.
+    /// If the pattern fails to compile, it is silently ignored.
+    ///
+    /// # Arguments
+    /// * `pattern` – A valid regex string (e.g. `r".*\.tmp$"`).
+    ///
+    /// # Returns
+    /// * `Self` with the regex exclusion added (a builder pattern).
+    pub fn skip_regex(mut self, pattern: &str) -> Self {
+        if let Ok(re) = Regex::new(pattern) {
+            self.skip_regexes.push(re);
+        }
+        self
+    }
+
+    /// Adds a glob pattern that should be excluded from the commit.
+    ///
+    /// The glob is matched against the full root-relative path. This is useful
+    /// for gitignore-style exclusions like `**/*.bak` or `build/*`.
+    /// If the pattern fails to compile, it is silently ignored.
+    ///
+    /// # Arguments
+    /// * `pattern` – A valid glob string (e.g. `"**/target/*"`).
+    ///
+    /// # Returns
+    /// * `Self` with the glob exclusion added (a builder pattern).
+    pub fn skip_glob(mut self, pattern: &str) -> Self {
+        if let Ok(glob) = Pattern::new(pattern) {
+            self.skip_globs.push(glob);
+        }
+        self
+    }
+
     /// Returns `true` when the given **relative** path should be excluded from
     /// the commit based on the current filter configuration.
     ///
@@ -279,6 +324,20 @@ impl CommitFilter {
     /// * `true` if the entry should be skipped.
     /// * `false` if the entry should be committed normally.
     pub(crate) fn should_skip(&self, rel: &Path, abs_upper: &Path) -> bool {
+        let rel_str = rel.to_string_lossy();
+
+        for re in &self.skip_regexes {
+            if re.is_match(&rel_str) {
+                return true;
+            }
+        }
+
+        for glob in &self.skip_globs {
+            if glob.matches(&rel_str) {
+                return true;
+            }
+        }
+
         if let Some(name) = rel.file_name() {
             if self.skip_files.contains(name.to_string_lossy().as_ref()) {
                 return true;

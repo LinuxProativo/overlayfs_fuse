@@ -56,9 +56,10 @@ impl OverlayFiles {
     pub fn mountpoint_as_home(&mut self) {
         let name = self.lower.file_name().unwrap_or_default().to_string_lossy();
 
-        let home_cache = env::var("HOME")
-            .map(|h| PathBuf::from(h).join(".cache"))
-            .ok();
+        let home_cache = env::var("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| env::var("HOME").map(|h| PathBuf::from(h).join(".cache")).ok());
 
         if let Some(cache_path) = home_cache {
             let _ = std::fs::create_dir_all(&cache_path);

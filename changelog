@@ -1,3 +1,10 @@
+Sat May 02 22:13:13 -03 2026:
+    - Update recursive_copy to obliterate existing destination files.
+    - Support XDG_CACHE_HOME for standard compliant cache paths.
+    - Add set_mount method for manual mount point configuration.
+    - Rename commit_filter module to filter for brevity.
+    - Rename fuse_ops module to fuse for naming consistency.
+    - Implement glob and regex patterns in commit filtering.
 Fri Apr 17 20:40:11 -03 2026:
     - Implement serde::Serialize and serde::Deserialize for IndeMode and OverlayAction.
     - Resolve libc::time_t 32-bit compatibility warning for musl targets.
