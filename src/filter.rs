@@ -89,19 +89,21 @@ fn has_prefix(rel: &Path, prefix: &Path) -> bool {
 /// knowing the physical host location of the upper directory.
 #[derive(Debug, Clone, Default)]
 pub struct CommitFilter {
+    /// Root-relative paths that MUST be committed even if other rules match.
+    pub force_files: HashSet<PathBuf>,
     /// Root-relative directory paths whose entire subtree is excluded.
-    skip_dirs: HashSet<PathBuf>,
+    pub skip_dirs: HashSet<PathBuf>,
     /// Exact filenames (bare name only, no directory component) that are
     /// excluded regardless of where they appear in the tree.
-    skip_files: HashSet<String>,
+    pub skip_files: HashSet<String>,
     /// Root-relative directories inside which zero-byte regular files are excluded.
-    skip_empty_files_in: HashSet<PathBuf>,
+    pub skip_empty_files_in: HashSet<PathBuf>,
     /// When `true`, any non-symlink entry with Unix mode `0o000` is excluded.
-    skip_zero_permissions: bool,
+    pub skip_zero_permissions: bool,
     /// Regular expressions matched against the full root-relative path.
-    skip_regexes: Vec<Regex>,
+    pub skip_regexes: Vec<Regex>,
     /// Glob patterns matched against the full root-relative path.
-    skip_globs: Vec<Pattern>,
+    pub skip_globs: Vec<Pattern>,
 }
 
 impl CommitFilter {
@@ -118,20 +120,21 @@ impl CommitFilter {
     ///
     /// | Path | Reason |
     /// |------|--------|
-    /// | `/dev` | Character/block devices managed by the kernel; never real files. |
-    /// | `/proc` | Virtual procfs; kernel-generated, mounts change a per-process. |
-    /// | `/sys` | sysfs; kernel ABI, always bind-mounted from the host. |
-    /// | `/run` | Runtime state (PID files, sockets); meaningless after the session ends. |
-    /// | `/tmp` | Temporary files; bwrap/proot typically bind-mount a fresh tmpfs here. |
-    /// | `/mnt` | Generic mount target; typically used as a bind entry point. |
-    /// | `/media` | Removable-media mount points; host-managed. |
-    /// | `/home` | User home directories; bwrap bind-mounts the real home here. |
+    /// | `/boot` | Bootloader files and kernels; should not be modified by the overlay. |
+    /// | `/dev` | Character/block devices managed by the kernel. |
+    /// | `/lost+found` | Filesystem recovery directory. |
+    /// | `/proc` | Virtual procfs; kernel-generated. |
+    /// | `/sys` | sysfs; kernel ABI. |
+    /// | `/run` | Runtime state; meaningless after the session ends. |
+    /// | `/tmp` | Temporary files. |
+    /// | `/mnt` | Generic mount target. |
+    /// | `/media` | Removable-media mount points. |
     ///
     /// Additionally, `skip_zero_permissions` is enabled because rootfs overlays
     /// routinely produce `0o000` stubs for `null`, `zero`, `random`, etc.
     pub fn rootfs() -> Self {
         const ROOTFS_SKIP_DIRS: &[&str] =
-            &["dev", "proc", "sys", "run", "tmp", "mnt", "media", "home"];
+            &["boot", "dev", "lost+found", "media", "mnt", "proc", "run", "sys", "tmp"];
 
         let mut filter = Self::new();
         filter.skip_zero_permissions = true;
@@ -172,7 +175,7 @@ impl CommitFilter {
     /// * `Self` with the directory exclusions added.
     pub fn skip_dirs<I, P>(mut self, paths: I) -> Self
     where
-        I: IntoIterator<Item = P>,
+        I: IntoIterator<Item=P>,
         P: AsRef<Path>,
     {
         for p in paths {
@@ -208,11 +211,41 @@ impl CommitFilter {
     /// * `Self` with the filename exclusions added.
     pub fn skip_files<I, S>(mut self, names: I) -> Self
     where
-        I: IntoIterator<Item = S>,
+        I: IntoIterator<Item=S>,
         S: Into<String>,
     {
         for n in names {
             self.skip_files.insert(n.into());
+        }
+        self
+    }
+
+    /// Registers a root-relative path to be forcibly committed, bypassing standard skip rules.
+    ///
+    /// # Arguments
+    /// * `path` – The root-relative path to the file or directory to be forced.
+    ///
+    /// # Returns
+    /// * `Self` with the forced path added (builder pattern).
+    pub fn force_file(mut self, path: impl AsRef<Path>) -> Self {
+        self.force_files.insert(normalise_dir(path.as_ref()).to_path_buf());
+        self
+    }
+
+    /// Registers multiple root-relative paths to be forcibly committed.
+    ///
+    /// # Arguments
+    /// * `paths` – An iterator of paths to be forced.
+    ///
+    /// # Returns
+    /// * `Self` with the forced paths added.
+    pub fn force_files<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item=P>,
+        P: AsRef<Path>,
+    {
+        for p in paths {
+            self.force_files.insert(normalise_dir(p.as_ref()).to_path_buf());
         }
         self
     }
@@ -248,7 +281,7 @@ impl CommitFilter {
     /// * `Self` with the rules added.
     pub fn skip_empty_files_in_dirs<I, P>(mut self, dirs: I) -> Self
     where
-        I: IntoIterator<Item = P>,
+        I: IntoIterator<Item=P>,
         P: AsRef<Path>,
     {
         for d in dirs {
@@ -373,6 +406,17 @@ impl CommitFilter {
         false
     }
 
+    /// Checks if a specific path is marked for forced synchronization.
+    ///
+    /// # Arguments
+    /// * `rel` – The relative path to check.
+    ///
+    /// # Returns
+    /// * `true` if the path is in the forced files set, `false` otherwise.
+    pub(crate) fn is_forced(&self, rel: &Path) -> bool {
+        self.force_files.contains(rel)
+    }
+
     /// Checks if a specific directory path is marked as skipped.
     ///
     /// # Arguments
@@ -382,5 +426,23 @@ impl CommitFilter {
     /// * `true` if the directory or any of its parent directories are in `skip_dirs`.
     pub(crate) fn is_skipped_dir(&self, rel: &Path) -> bool {
         self.skip_dirs.iter().any(|d| has_prefix(rel, d))
+    }
+
+    /// Excludes the `/home` directory and all of its descendants from the commit.
+    ///
+    /// # Returns
+    /// * `Self` with the home directory exclusion added (a builder pattern).
+    pub fn skip_homedir(mut self) -> Self {
+        self.skip_dirs.insert(PathBuf::from("home"));
+        self
+    }
+
+    /// Excludes the `/root` directory (the superuser's home) and all of its descendants.
+    ///
+    /// # Returns
+    /// * `Self` with the root directory exclusion added (a builder pattern).
+    pub fn skip_rootdir(mut self) -> Self {
+        self.skip_dirs.insert(PathBuf::from("root"));
+        self
     }
 }

@@ -1,3 +1,10 @@
+Mon May 04 13:41:27 -03 2026:
+    - Added skip_homedir and skip_rootfs filters to manage standard linux directory exclusions.
+    - Implemented force_file and force_files to bypass exclusion rules for specific paths.
+    - Added automated directory filters for /boot and /lost+found in commit operations.
+    - Introduced atomic commit logic to safely handle forced file overrides via backup and restore.
+    - Optimized directory traversal to respect forced file flags before applying skip filters.
+    - Exposed internal fields of CommitFilter to allow direct struct literal initialization.
 Sun May 03 22:17:01 -03 2026:
     - Fixed: CommitFilter now validates exact paths (e.g., etc/mtab), preventing conflicts with duplicate
       filenames in different directories.

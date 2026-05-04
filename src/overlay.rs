@@ -433,34 +433,6 @@ impl OverlayFS {
         Ok(())
     }
 
-    /// Recursively copies an entire directory tree from source to destination.
-    ///
-    /// # Arguments
-    /// * `src` - The source directory path.
-    /// * `dst` - The destination directory path.
-    ///
-    /// # Returns
-    /// * `Ok(())` if the entire tree is copied successfully.
-    /// * `Err` if any I/O error occurs during traversal or copying.
-    // fn copy_tree(&self, src: &Path, dst: &Path) -> Result<()> {
-    //     if !dst.exists() {
-    //         fs::create_dir_all(dst)?;
-    //     }
-    //
-    //     let mut options = CopyOptions::new();
-    //     options.content_only = true;
-    //     options.overwrite = true;
-    //
-    //     copy(src, dst, &options).map_err(|e| {
-    //         Error::new(
-    //             std::io::ErrorKind::Other,
-    //             format!("fs_extra error: {} (src: {:?}, dst: {:?})", e, src, dst),
-    //         )
-    //     })?;
-    //
-    //     Ok(())
-    // }
-
     /// Synchronizes changes from the upper layer back to the lower layer.
     ///
     /// This function performs an iterative tree traversal to merge the filesystem state.
@@ -496,6 +468,45 @@ impl OverlayFS {
                 let src_path = entry.path();
                 let dst_path = current_dst.join(&name);
                 let ft = entry.file_type()?;
+
+                // Force Copy Files
+                if let Some(filter) = &self.commit_filter {
+                    let rel = src_path.strip_prefix(src_root).unwrap_or(&src_path);
+                    if filter.is_forced(rel) && src_path.exists() {
+                        if !ft.is_dir() {
+                            let bak_path = dst_path.with_extension("bak");
+
+                            let has_bak = if dst_path.exists() {
+                                fs::rename(&dst_path, &bak_path).is_ok()
+                            } else {
+                                false
+                            };
+
+                            let success = if ft.is_symlink() {
+                                if let Ok(target) = fs::read_link(&src_path) {
+                                    unix::fs::symlink(target, &dst_path).is_ok()
+                                } else {
+                                    false
+                                }
+                            } else if ft.is_file() {
+                                fs::copy(&src_path, &dst_path).is_ok()
+                            } else {
+                                false
+                            };
+
+                            if success {
+                                let _ = self.sync_metadata(&src_path, &dst_path);
+                                if has_bak {
+                                    let _ = fs::remove_file(&bak_path);
+                                }
+                            } else if has_bak {
+                                let _ = fs::rename(&bak_path, &dst_path);
+                            }
+
+                            continue;
+                        }
+                    }
+                }
 
                 if name.to_string_lossy().starts_with(WH_PREFIX) {
                     let target_name = name.to_string_lossy().replacen(WH_PREFIX, "", 1);
