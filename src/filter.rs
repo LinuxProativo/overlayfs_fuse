@@ -338,10 +338,8 @@ impl CommitFilter {
             }
         }
 
-        if let Some(name) = rel.file_name() {
-            if self.skip_files.contains(name.to_string_lossy().as_ref()) {
-                return true;
-            }
+        if self.skip_files.contains(rel_str.as_ref()) {
+            return true;
         }
 
         for skipped in &self.skip_dirs {

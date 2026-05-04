@@ -503,25 +503,23 @@ fn test_filter_skip_dirs_single_and_batch() {
 }
 
 #[test]
-fn test_filter_skip_files_single_and_batch() {
+fn test_filter_skip_files_and_paths() {
     let filter = CommitFilter::new()
-        .skip_file("lost+found")
-        .skip_files(["__pycache__", ".DS_Store"]);
+        .skip_file("etc/mtab")
+        .skip_files(["README.md", "CHANGELOG.md"])
+        .skip_glob("**/__pycache__")
+        .skip_glob("*.tmp");
 
-    assert!(filter.should_skip(Path::new("lost+found"), Path::new("/upper/lost+found")));
+    assert!(filter.should_skip(Path::new("etc/mtab"), Path::new("/upper/etc/mtab")));
+    assert!(filter.should_skip(Path::new("README.md"), Path::new("/upper/README.md")));
+    assert!(filter.should_skip(Path::new("CHANGELOG.md"), Path::new("/upper/CHANGELOG.md")));
+    assert!(!filter.should_skip(Path::new("usr/share/doc/README.md"), Path::new("/upper/usr/share/doc/README.md")));
     assert!(filter.should_skip(
         Path::new("usr/lib/__pycache__"),
         Path::new("/upper/usr/lib/__pycache__")
     ));
-    assert!(filter.should_skip(
-        Path::new("home/user/.DS_Store"),
-        Path::new("/upper/home/user/.DS_Store")
-    ));
-    assert!(!filter.should_skip(
-        Path::new("not_lost+found"),
-        Path::new("/upper/not_lost+found")
-    ));
     assert!(!filter.should_skip(Path::new("etc/passwd"), Path::new("/upper/etc/passwd")));
+    assert!(filter.should_skip(Path::new("file.tmp"), Path::new("/upper/file.tmp")));
 }
 
 #[test]

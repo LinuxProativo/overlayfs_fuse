@@ -1,6 +1,6 @@
 [package]
 name = "overlayfs_fuse"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 description = "A minimal, safe, synchronous OverlayFS implementation using FUSE."
 authors = ["mxnt <m10ferrari1200@gmail.com>"]

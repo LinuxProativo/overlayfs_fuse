@@ -4,8 +4,8 @@
 //! (commit/discard) of the overlay layers using FUSE.
 
 use crate::InodeMode;
-use crate::filter::CommitFilter;
 use crate::files::OverlayFiles;
+use crate::filter::CommitFilter;
 use crate::fuse::OverlayOps;
 use crate::layers::WH_PREFIX;
 use fuser::{BackgroundSession, Config, MountOption, SessionACL};

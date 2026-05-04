@@ -1,3 +1,6 @@
+Sun May 03 22:17:01 -03 2026:
+    - Fixed: CommitFilter now validates exact paths (e.g., etc/mtab), preventing conflicts with duplicate
+      filenames in different directories.
 Sat May 02 22:13:13 -03 2026:
     - Update recursive_copy to obliterate existing destination files.
     - Support XDG_CACHE_HOME for standard compliant cache paths.
