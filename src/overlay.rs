@@ -476,7 +476,7 @@ impl OverlayFS {
                         if !ft.is_dir() {
                             let bak_path = dst_path.with_extension("bak");
 
-                            let has_bak = if dst_path.exists() {
+                            let has_bak = if fs::symlink_metadata(&dst_path).is_ok() {
                                 fs::rename(&dst_path, &bak_path).is_ok()
                             } else {
                                 false
@@ -537,7 +537,7 @@ impl OverlayFS {
                     stack.push((src_path, dst_path));
                 } else if ft.is_symlink() {
                     let target = fs::read_link(&src_path)?;
-                    if dst_path.exists() {
+                    if fs::symlink_metadata(&dst_path).is_ok() {
                         let _ = fs::remove_file(&dst_path);
                     }
                     unix::fs::symlink(target, &dst_path)?;
