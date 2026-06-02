@@ -18,7 +18,7 @@ use std::ffi::{CString, OsStr};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt, symlink};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zerocopy::IntoBytes;
@@ -150,7 +150,10 @@ impl OverlayOps {
                 Self::copy_dir_all(&src_path, &dst_path)?;
             } else if ft.is_symlink() {
                 let target = fs::read_link(&src_path)?;
-                std::os::unix::fs::symlink(&target, &dst_path)?;
+                if fs::symlink_metadata(&dst_path).is_ok() {
+                    fs::remove_file(&dst_path)?;
+                }
+                symlink(&target, &dst_path)?;
                 Self::copy_ownership_and_times(&src_path, &dst_path, &entry_meta);
             } else {
                 fs::copy(&src_path, &dst_path)?;
@@ -806,7 +809,7 @@ impl Filesystem for OverlayOps {
             }
         }
 
-        match std::os::unix::fs::symlink(target, &upper_path) {
+        match symlink(target, &upper_path) {
             Ok(_) => {
                 self.layers.clear_whiteout(&rel);
                 match fs::symlink_metadata(&upper_path) {
@@ -1299,7 +1302,7 @@ impl Filesystem for OverlayOps {
             if parent_path.as_os_str().is_empty() {
                 INodeNo(1)
             } else {
-                self.inodes.get_ino(parent_path)
+                self.inodes.peek_ino(parent_path)
             }
         };
 
@@ -1393,7 +1396,7 @@ impl Filesystem for OverlayOps {
             if parent_path.as_os_str().is_empty() {
                 INodeNo(1)
             } else {
-                self.inodes.get_ino(parent_path)
+                self.inodes.peek_ino(parent_path)
             }
         };
 
@@ -1887,7 +1890,7 @@ impl Filesystem for OverlayOps {
                     fs::Permissions::from_mode(mode & !umask & 0o7777),
                 );
                 self.layers.clear_whiteout(&rel);
-                match fs::metadata(&upper_path) {
+                match fs::symlink_metadata(&upper_path) {
                     Ok(meta) => {
                         let ino = self.inodes.get_ino(&rel);
                         reply.created(
@@ -2016,7 +2019,10 @@ impl Filesystem for OverlayOps {
                 return reply.offset(result);
             }
             libc::SEEK_CUR => {
-                return reply.error(Errno::from_i32(libc::EINVAL));
+                // Stateless filesystem: there is no persistent fd between calls,
+                // so the caller's current position is unknown. ESPIPE signals
+                // that relative seeking is not supported in this context.
+                return reply.error(Errno::from_i32(libc::ESPIPE));
             }
             _ => {}
         }
