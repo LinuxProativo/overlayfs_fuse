@@ -1,3 +1,15 @@
+Sun Jun 01 12:00:00 -03 2026:
+    - Fix create using fs::metadata instead of fs::symlink_metadata, causing
+      ENOENT on broken symlinks in the upper layer.
+    - Fix readdir and readdirplus using get_ino for parent (..) entry, inflating
+      lookup_count without a corresponding kernel forget, leaking InodeStore entries.
+    - Fix copy_dir_all not removing existing destination before recreating symlinks,
+      causing EEXIST during directory renames.
+    - Fix should_skip in CommitFilter comparing full relative path against skip_files
+      instead of the bare filename, causing skip rules to never match below root.
+    - Fix lseek SEEK_CUR returning EINVAL; now returns ESPIPE to correctly signal
+      that relative seeking is unsupported in a stateless filesystem.
+    - Update recursive_copy crate.
 Mon May 04 13:41:27 -03 2026:
     - Added skip_homedir and skip_rootfs filters to manage standard linux directory exclusions.
     - Implemented force_file and force_files to bypass exclusion rules for specific paths.
@@ -28,12 +40,10 @@ Tue Apr 14 15:24:56 -03 2026:
         - Supports custom exclusion rules for specific filenames, directory subtrees, and zero-byte files
           within designated paths.
     - Replaced remove_dir_all with obliterate for post-overlay cleanup to ensure more reliable directory removal.
-
-1.2.1 — 2026-04-01:
+Wed Apr 01 12:00:00 -03 2026:
     - Robust removal via obliterate: OverlayAction::Discard now uses the obliterate crate to remove the upper layer,
       ensuring cleanup succeeds even when files or directories have restrictive permissions (e.g., 000).
-
-1.2.0 — 2026-03-18:
+Wed Mar 18 12:00:00 -03 2026:
     - memmap2 integration: read() now memory-maps files ≥ 128 KiB via memmap2::MmapOptions, returning a slice
       directly to the FUSE kernel without allocating an intermediate Vec<u8>.
     - zerocopy integration: IntoBytes is used on all reply.data() call sites as a compile-time guarantee that
@@ -44,8 +54,7 @@ Tue Apr 14 15:24:56 -03 2026:
     - EOF fast-path: read() now returns an empty slice immediately when the file is empty or offset >= file_len,
       without opening or mapping the file.
     - OverlayAction and InodeMode now derive Debug, Clone, Copy, PartialEq, and Eq.
-
-1.1.0 — 2026-03-13:
+Fri Mar 13 12:00:00 -03 2026:
     - State Safety: Added is_mounted() checks to set_upper(), set_inode_mode(), and mountpoint_as_home() to prevent
       configuration changes while the filesystem is active.
     - Fluent API: Updated configuration methods to return &mut Self, allowing for method chaining (Builder Pattern).
@@ -60,8 +69,7 @@ Tue Apr 14 15:24:56 -03 2026:
       visible names (_upper, mount_...) for better visibility and system compatibility.
     - FUSE Mounting Races: Resolved fusermount3 access errors in tests by ensuring unique mount point paths
       for every instance, even when sharing the same PID.
-
-1.0.0 — Initial Release: 
+Sat Mar 07 12:00:00 -03 2026:
     - OverlayFS struct as the primary controller for the FUSE-based overlay lifecycle.
     - mount() / umount() methods with graceful session teardown and libc fallback (MNT_DETACH).
     - overlay_action() supporting four finalization strategies via OverlayAction:

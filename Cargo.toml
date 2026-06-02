@@ -1,6 +1,6 @@
 [package]
 name = "overlayfs_fuse"
-version = "1.4.2"
+version = "1.4.3"
 edition = "2024"
 description = "A minimal, safe, synchronous OverlayFS implementation using FUSE."
 authors = ["mxnt <m10ferrari1200@gmail.com>"]
@@ -20,7 +20,7 @@ glob = "0.3"
 libc = "0.2"
 memmap2  = "0.9"
 obliterate = "1.2"
-recursive_copy = "2.0"
+recursive_copy = "2.1"
 regex = "1.12"
 serde = { version = "1.0", features = ["derive"] }
 zerocopy = { version = "0.8", features = ["derive"] }
